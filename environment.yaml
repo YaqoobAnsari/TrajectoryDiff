@@ -1,0 +1,90 @@
+# TrajectoryDiff Environment
+# Create: conda env create -f environment.yaml
+# Activate: conda activate trajdiff
+# Update: conda env update -f environment.yaml --prune
+
+name: trajdiff
+
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+
+dependencies:
+  # Python
+  - python=3.10
+  
+  # PyTorch ecosystem
+  - pytorch=2.1
+  - pytorch-cuda=12.1
+  - torchvision
+  - torchaudio
+  
+  # PyTorch Lightning
+  - lightning=2.1
+  - torchmetrics
+  
+  # Configuration management
+  - hydra-core=1.3
+  - omegaconf
+  
+  # Data processing
+  - numpy
+  - scipy
+  - pandas
+  - h5py
+  - pillow
+  
+  # Image processing
+  - scikit-image
+  - opencv
+  
+  # Visualization
+  - matplotlib
+  - seaborn
+  
+  # Progress bars
+  - tqdm
+  - rich
+  
+  # Jupyter
+  - jupyter
+  - jupyterlab
+  - ipywidgets
+  
+  # Testing
+  - pytest
+  - pytest-cov
+  
+  # Code quality
+  - black
+  - ruff
+  - mypy
+  - pre-commit
+  
+  # Git
+  - gitpython
+  
+  # Pip packages
+  - pip
+  - pip:
+    # Experiment tracking
+    - wandb
+    
+    # Deep learning utilities
+    - einops
+    - timm
+    
+    # Graph neural networks (optional, for trajectory encoding)
+    - torch-geometric
+    
+    # Diffusion models
+    - diffusers
+    
+    # Path planning
+    - networkx
+    
+    # Type stubs
+    - types-tqdm
+    - types-pillow

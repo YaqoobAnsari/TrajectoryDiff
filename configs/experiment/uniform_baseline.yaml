@@ -1,0 +1,32 @@
+# Experiment: Uniform Sampling Baseline
+# Standard diffusion with uniform sampling (what existing methods assume)
+
+# @package _global_
+
+experiment:
+  name: uniform_baseline
+  tags: [baseline, uniform, comparison]
+
+# Use uniform sampling (traditional approach)
+data:
+  sampling:
+    strategy: uniform
+    uniform:
+      rate: 0.01  # 1% sampling rate
+
+# Disable trajectory encoder (not needed for uniform)
+model:
+  trajectory_encoder:
+    type: spatial_only  # Only use sparse map, no trajectory structure
+  
+  # Same U-Net for fair comparison
+  unet:
+    base_channels: 32
+    channel_multipliers: [1, 2, 4]
+    num_res_blocks: 1
+
+# Same training config
+training:
+  max_epochs: 50
+  optimizer:
+    lr: 2e-4

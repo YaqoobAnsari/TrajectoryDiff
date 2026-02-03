@@ -1,0 +1,48 @@
+# Default Training Configuration
+
+# Training duration
+max_epochs: 100
+max_steps: null  # If set, overrides max_epochs
+
+# Validation
+val_check_interval: 1.0  # Check every epoch
+
+# Logging
+log_every_n_steps: 50
+
+# Reproducibility
+deterministic: false
+
+# Optimizer
+optimizer:
+  name: adamw
+  lr: 1e-4
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  eps: 1e-8
+
+# Learning rate scheduler
+scheduler:
+  name: cosine
+  warmup_epochs: 5
+  min_lr: 1e-6
+
+# Gradient handling
+gradient:
+  clip_val: 1.0
+  accumulation_steps: 1
+
+# Checkpointing
+checkpoint:
+  save_top_k: 3
+  monitor: val/rmse
+  mode: min
+  save_last: true
+
+# Early stopping
+early_stopping:
+  enabled: true
+  monitor: val/rmse
+  patience: 20
+  mode: min
+  min_delta: 0.001

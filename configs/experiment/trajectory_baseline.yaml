@@ -1,0 +1,30 @@
+# Experiment: Trajectory Sampling Baseline
+# Compare against uniform sampling to show trajectory-awareness matters
+
+# @package _global_
+
+experiment:
+  name: trajectory_baseline
+  tags: [baseline, trajectory, comparison]
+
+# Use trajectory sampling
+data:
+  sampling:
+    strategy: trajectory
+    trajectory:
+      method: mixed
+      num_trajectories: 3
+      points_per_trajectory: 100
+
+# Smaller model for faster iteration
+model:
+  unet:
+    base_channels: 32
+    channel_multipliers: [1, 2, 4]
+    num_res_blocks: 1
+
+# Shorter training for baseline
+training:
+  max_epochs: 50
+  optimizer:
+    lr: 2e-4

@@ -1,0 +1,50 @@
+# Main configuration file for TrajectoryDiff
+# Override with: python train.py key=value
+# Or use experiment configs: python train.py experiment=baseline
+
+defaults:
+  - _self_
+  - data: radiomapseer
+  - model: trajectory_diffusion
+  - training: default
+  - optional experiment: null
+
+# Project paths
+paths:
+  root_dir: ${hydra:runtime.cwd}
+  data_dir: ${paths.root_dir}/data
+  output_dir: ${paths.root_dir}/experiments
+  log_dir: ${paths.output_dir}/logs
+
+# Experiment identification
+experiment:
+  name: default
+  seed: 42
+  tags: []
+
+# Hardware
+hardware:
+  accelerator: auto  # auto, cpu, gpu, tpu
+  devices: 1
+  precision: 16-mixed  # 32, 16-mixed, bf16-mixed
+  num_workers: 4
+
+# Logging
+logging:
+  wandb:
+    enabled: true
+    project: trajectorydiff
+    entity: null  # Set to your wandb username/team
+    offline: false
+  tensorboard:
+    enabled: true
+
+# Hydra configuration
+hydra:
+  run:
+    dir: ${paths.output_dir}/${experiment.name}/${now:%Y-%m-%d_%H-%M-%S}
+  sweep:
+    dir: ${paths.output_dir}/multirun/${experiment.name}
+    subdir: ${hydra.job.num}
+  job:
+    chdir: false

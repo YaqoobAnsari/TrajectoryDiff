@@ -1,0 +1,75 @@
+# RadioMapSeer Dataset Configuration
+# Contains dense radio maps for supervised training
+# We simulate trajectory sampling on top
+
+# Dataset paths
+dataset:
+  name: radiomapseer
+  root: ${paths.data_dir}/RadioMapSeer
+  split_file: ${data.dataset.root}/splits.json
+
+# Image dimensions
+image:
+  height: 256
+  width: 256
+  resolution: 0.25  # meters per pixel
+
+# Data splits
+splits:
+  train: 0.7
+  val: 0.15
+  test: 0.15
+
+# Trajectory sampling configuration
+sampling:
+  # Sampling strategy: uniform, trajectory, or both
+  strategy: trajectory  # uniform | trajectory | mixed
+  
+  # For uniform sampling (baseline comparison)
+  uniform:
+    rate: 0.01  # 1% of pixels
+  
+  # For trajectory sampling (our method)
+  trajectory:
+    # Trajectory generation method
+    method: mixed  # shortest_path | random_walk | corridor_biased | mixed
+    
+    # Number of trajectories per sample
+    num_trajectories: 3
+    
+    # Points per trajectory
+    points_per_trajectory: 100
+    
+    # Noise parameters
+    position_noise_std: 0.5  # meters
+    rss_noise_std: 2.0  # dB
+    
+    # For shortest_path
+    shortest_path:
+      min_path_length: 20  # minimum path length in meters
+    
+    # For random_walk
+    random_walk:
+      step_size: 1.0  # meters
+      momentum: 0.8  # directional persistence
+    
+    # For corridor_biased
+    corridor_biased:
+      corridor_preference: 0.7  # probability of staying in corridor
+
+# Data augmentation
+augmentation:
+  enabled: true
+  random_rotation: true  # 90, 180, 270 degrees
+  random_flip: true  # horizontal and vertical
+  random_crop:
+    enabled: false
+    size: 128
+
+# DataLoader settings
+loader:
+  batch_size: 16
+  num_workers: ${hardware.num_workers}
+  pin_memory: true
+  drop_last: true
+  shuffle: true  # Only for training
