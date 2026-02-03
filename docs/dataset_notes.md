@@ -4,89 +4,115 @@
 
 **RadioMapSeer** is a pathloss radio map dataset for urban outdoor environments, generated using WinProp ray-tracing software.
 
-**Key Insight**: While the original project plan assumed indoor environments, RadioMapSeer is outdoor/urban. However, **our trajectory-based approach still applies**:
-- Streets/sidewalks = walkable paths (like corridors)
-- Buildings = obstacles (like walls)
-- Private areas = blind spots (no crowdsourced data)
+## Dataset Structure
 
-## Dataset Specifications
+```
+data/raw/
+├── dataset.csv              # Index mapping maps to transmitters
+├── antenna/                 # Transmitter positions (JSON)
+│   ├── 0.json              # 80 [x,y] coordinates per map
+│   └── ...
+├── gain/                    # Radio/pathloss maps
+│   ├── IRT2/               # Intelligent Ray Tracing (2 interactions) ← RECOMMENDED
+│   │   ├── 0_0.png         # {map_id}_{tx_id}.png
+│   │   └── ...
+│   ├── IRT4/               # 4 interactions (more accurate, slower)
+│   ├── DPM/                # Dominant Path Model
+│   ├── carsIRT2/           # With cars on roads
+│   └── ...
+├── png/
+│   └── buildings_complete/ # Binary building footprints
+│       ├── 0.png
+│       └── ...
+└── polygon/                # Vector building data (for advanced use)
+```
 
-| Property | Value |
-|----------|-------|
-| **Format** | PNG images (8-bit grayscale) + JSON metadata |
-| **Resolution** | 256×256 pixels |
-| **Spatial Resolution** | 1 meter per pixel |
-| **Coverage** | 256m × 256m per map |
-| **City Maps** | 701 unique maps |
-| **Transmitters per Map** | 80 |
-| **Total Samples** | 56,080 per propagation model |
-| **Cities** | Ankara, Berlin, Glasgow, Ljubljana, London, Tel Aviv |
+## Verified Specifications
+
+| Property | Value | Notes |
+|----------|-------|-------|
+| **Building Maps** | 701 files | Binary grayscale (0=building, 255=walkable) |
+| **Radio Maps** | 56,080 files | 701 maps × 80 transmitters |
+| **Resolution** | 256×256 pixels | 1 meter per pixel |
+| **Walkable Ratio** | 34.8% ± 4.4% | Streets, open areas |
+| **Transmitters/Map** | 80 | Positioned within [53, 202] pixel range |
 
 ## Pathloss Value Encoding
 
-| Property | Value |
-|----------|-------|
-| **Min Pathloss** | -186 dB |
-| **Max Pathloss** | -47 dB |
-| **Threshold** | -127 dB |
-| **PNG Encoding** | Linear mapping to 0-255 grayscale |
+| PNG Value | Pathloss (dB) | Signal Quality |
+|-----------|---------------|----------------|
+| 0 | -186 dB | Minimum (no signal) |
+| 127 | -116.5 dB | Medium |
+| 255 | -47 dB | Maximum (near transmitter) |
 
-**Conversion formula**:
+**Conversion formulas**:
 ```python
-# PNG to dB
-pathloss_db = (png_value / 255) * 139 + (-186)  # Approximate
+# PNG (0-255) to dB
+pathloss_db = (png_value / 255) * 139 + (-186)
 
 # dB to PNG
-png_value = int((pathloss_db - (-186)) / 139 * 255)
+png_value = int((pathloss_db + 186) / 139 * 255)
 ```
 
-## Dataset Variants
+**Observed statistics** (from IRT2):
+- Mean PNG value: ~29 (≈ -170 dB)
+- Full range utilized: [0, 255]
+- Most values concentrated in low range (weak signals)
 
-| Variant | Description | Recommended |
-|---------|-------------|-------------|
-| **IRT2** | Intelligent Ray Tracing, 2 max interactions | Yes (simpler) |
-| **IRT4** | Intelligent Ray Tracing, 4 max interactions | More realistic |
-| **DPM** | Dominant Path Model | Fastest but less accurate |
-| **3D IRT2** | 3D variant | For 3D research |
-| **IRT2HighRes** | Higher resolution variant | **Recommended** |
+## Building Map Encoding
 
-## Download Links
+- **Value 0** (Black): Building footprint (obstacle)
+- **Value 255** (White): Street/walkable area
 
-- **Primary**: [IEEE DataPort](https://ieee-dataport.org/documents/dataset-pathloss-and-toa-radio-maps-localization-application)
-- **Alternative**: [RadioMapSeer GitHub Page](https://radiomapseer.github.io/) (Google Drive)
-- **Recommended file**: `IRT2HighRes.zip` (~930 MB)
+This binary encoding is perfect for trajectory generation:
+- White pixels = valid walking locations
+- Black pixels = obstacles to avoid
 
-## Data Organization (Expected)
+## Transmitter Positions
 
-```
-RadioMapSeer/
-├── city_maps/           # Building footprints (256×256 PNG)
-│   ├── ankara/
-│   ├── berlin/
-│   └── ...
-├── radio_maps/          # Pathloss maps (256×256 PNG)
-│   ├── IRT2/
-│   │   ├── map_001_tx_01.png
-│   │   └── ...
-│   └── IRT4/
-├── tx_locations/        # Transmitter positions (JSON or PNG)
-└── metadata/            # Simulation parameters
+Each `antenna/{map_id}.json` contains 80 [x, y] pixel coordinates:
+```json
+[[108, 68], [134, 98], [80, 118], ...]
 ```
 
-*Note: Exact structure to be verified after download.*
+Positions are centered (mean ~128) with buffer from edges (min ~53, max ~202).
 
-## Trajectory Sampling Adaptation
+## Recommended Data Split
 
-For outdoor urban scenarios, trajectory sampling represents:
+| Split | Maps | Samples | Purpose |
+|-------|------|---------|---------|
+| Train | 490 (70%) | 39,200 | Model training |
+| Val | 105 (15%) | 8,400 | Hyperparameter tuning |
+| Test | 106 (15%) | 8,480 | Final evaluation |
 
-1. **Pedestrian paths**: Walking along sidewalks, crossing streets
-2. **Vehicle trajectories**: Driving along roads
-3. **Delivery routes**: Specific areas of interest
+**Important**: Split by MAP, not by sample, to avoid data leakage.
 
-**Key differences from indoor**:
-- Larger scale (city blocks vs. building floors)
-- More open areas (streets vs. corridors)
-- Different obstacle types (buildings vs. walls)
+## Visualization
+
+![Dataset Samples](figures/dataset_samples.png)
+*Top: Building footprints (white=walkable). Bottom: Pathloss maps (yellow=strong signal near Tx).*
+
+![Value Distribution](figures/value_distribution.png)
+*Pathloss value distribution shows most areas have weak signal (low PNG / high dB loss).*
+
+## Usage Notes
+
+### For Trajectory Sampling
+- Use `png/buildings_complete/` for walkable area extraction
+- White pixels (255) are valid trajectory points
+- Generate A* paths between random walkable points
+
+### For Training
+- Use `gain/IRT2/` for pathloss ground truth
+- Pair with corresponding building map and antenna positions
+- Consider IRT4 for higher fidelity (but slower simulation)
+
+### Key Insight for Our Method
+The **binary building maps** naturally define:
+- **Walkable areas** (streets) → High trajectory density
+- **Buildings** (obstacles) → Zero trajectory samples (blind spots)
+
+This is exactly the trajectory vs. uniform sampling distinction we're modeling.
 
 ## Citation
 
@@ -100,10 +126,6 @@ For outdoor urban scenarios, trajectory sampling represents:
 }
 ```
 
-## License
-
-Creative Commons Attribution 4.0 (CC BY 4.0)
-
 ---
 
-*Last updated: 2026-02-03*
+*Analysis completed: 2026-02-03*
