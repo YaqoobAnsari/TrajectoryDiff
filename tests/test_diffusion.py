@@ -467,5 +467,167 @@ class TestIntegration:
         assert not torch.isnan(pred).any()
 
 
+class TestConditionEncoder:
+    """Test condition encoder components."""
+
+    def test_condition_encoder_full(self):
+        """Full condition encoder should produce correct shape."""
+        from models.encoders import ConditionEncoder
+
+        encoder = ConditionEncoder(
+            out_channels=64,
+            use_building_map=True,
+            use_sparse_rss=True,
+            use_trajectory_mask=True,
+            use_coverage_density=True,
+            use_tx_position=True,
+        )
+
+        building_map = torch.randn(2, 1, 64, 64)
+        sparse_rss = torch.randn(2, 1, 64, 64)
+        trajectory_mask = torch.randn(2, 1, 64, 64)
+        coverage_density = torch.randn(2, 1, 64, 64)
+        tx_position = torch.tensor([[32.0, 32.0], [48.0, 16.0]])
+
+        output = encoder(
+            building_map=building_map,
+            sparse_rss=sparse_rss,
+            trajectory_mask=trajectory_mask,
+            coverage_density=coverage_density,
+            tx_position=tx_position,
+        )
+
+        assert output.shape == (2, 64, 64, 64)
+        assert not torch.isnan(output).any()
+
+    def test_condition_encoder_minimal(self):
+        """Minimal condition encoder should work."""
+        from models.encoders import ConditionEncoder
+
+        encoder = ConditionEncoder(
+            out_channels=32,
+            use_building_map=True,
+            use_sparse_rss=True,
+            use_trajectory_mask=False,
+            use_coverage_density=False,
+            use_tx_position=False,
+        )
+
+        building_map = torch.randn(2, 1, 64, 64)
+        sparse_rss = torch.randn(2, 1, 64, 64)
+
+        output = encoder(
+            building_map=building_map,
+            sparse_rss=sparse_rss,
+        )
+
+        assert output.shape == (2, 32, 64, 64)
+
+    def test_tx_position_encoder(self):
+        """TX position encoder should produce spatial features."""
+        from models.encoders import TxPositionEncoder
+
+        encoder = TxPositionEncoder(channels=8, encoding_type='gaussian')
+        tx_position = torch.tensor([[32.0, 32.0], [48.0, 16.0]])
+
+        output = encoder(tx_position, H=64, W=64)
+
+        assert output.shape == (2, 8, 64, 64)
+        # Output should peak at TX position
+        assert output[0, 0, 32, 32] > output[0, 0, 0, 0]
+
+    def test_positional_encoding_2d(self):
+        """2D positional encoding should have correct shape."""
+        from models.encoders import PositionalEncoding2D
+
+        encoder = PositionalEncoding2D(channels=16)
+        output = encoder(H=64, W=64, device=torch.device('cpu'))
+
+        assert output.shape == (1, 16, 64, 64)
+
+    def test_get_condition_encoder_presets(self):
+        """Factory function should return valid encoders."""
+        from models.encoders import get_condition_encoder
+
+        full = get_condition_encoder('full', out_channels=64)
+        minimal = get_condition_encoder('minimal', out_channels=32)
+        building = get_condition_encoder('building_only', out_channels=16)
+
+        assert full.out_channels == 64
+        assert minimal.out_channels == 32
+        assert building.out_channels == 16
+
+
+class TestTrajectoryConditionedUNet:
+    """Test the full trajectory-conditioned model."""
+
+    def test_trajectory_unet_forward(self):
+        """Trajectory-conditioned U-Net should produce correct output."""
+        from models.encoders import TrajectoryConditionedUNet
+
+        model = TrajectoryConditionedUNet(
+            unet_size='small',
+            image_size=64,
+            condition_channels=32,
+        )
+
+        x = torch.randn(2, 1, 64, 64)
+        t = torch.tensor([10, 50])
+        building_map = torch.randn(2, 1, 64, 64)
+        sparse_rss = torch.randn(2, 1, 64, 64)
+        trajectory_mask = torch.randn(2, 1, 64, 64)
+        coverage_density = torch.randn(2, 1, 64, 64)
+        tx_position = torch.tensor([[32.0, 32.0], [48.0, 16.0]])
+
+        output = model(
+            x, t,
+            building_map=building_map,
+            sparse_rss=sparse_rss,
+            trajectory_mask=trajectory_mask,
+            coverage_density=coverage_density,
+            tx_position=tx_position,
+        )
+
+        assert output.shape == x.shape
+        assert not torch.isnan(output).any()
+
+    def test_trajectory_unet_with_diffusion(self):
+        """Trajectory U-Net should integrate with diffusion."""
+        from models.diffusion import GaussianDiffusion
+        from models.encoders import TrajectoryConditionedUNet
+
+        diffusion = GaussianDiffusion(num_timesteps=100, beta_schedule='linear')
+        model = TrajectoryConditionedUNet(
+            unet_size='small',
+            image_size=64,
+            condition_channels=32,
+        )
+
+        x_0 = torch.randn(2, 1, 64, 64)
+        t = diffusion.sample_timesteps(2, x_0.device)
+
+        building_map = torch.randn(2, 1, 64, 64)
+        sparse_rss = torch.randn(2, 1, 64, 64)
+        trajectory_mask = torch.randn(2, 1, 64, 64)
+        coverage_density = torch.randn(2, 1, 64, 64)
+        tx_position = torch.tensor([[32.0, 32.0], [48.0, 16.0]])
+
+        # Forward diffusion
+        x_t = diffusion.q_sample(x_0, t)
+
+        # Model prediction
+        pred = model(
+            x_t, t,
+            building_map=building_map,
+            sparse_rss=sparse_rss,
+            trajectory_mask=trajectory_mask,
+            coverage_density=coverage_density,
+            tx_position=tx_position,
+        )
+
+        assert pred.shape == x_0.shape
+        assert not torch.isnan(pred).any()
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
