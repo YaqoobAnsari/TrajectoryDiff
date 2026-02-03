@@ -32,6 +32,30 @@ TrajectoryDiff explicitly models the **trajectory structure** of real-world samp
 
 ## Installation
 
+### Option A: Virtual Environment (Recommended)
+
+```bash
+# Clone the repository
+git clone https://github.com/YaqoobAnsari/TrajectoryDiff.git
+cd TrajectoryDiff
+
+# Create virtual environment
+python -m venv venv
+
+# Activate (Windows)
+venv\Scripts\activate
+# Activate (Linux/Mac)
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# For development (testing, linting)
+pip install -r requirements-dev.txt
+```
+
+### Option B: Conda Environment
+
 ```bash
 # Clone the repository
 git clone https://github.com/YaqoobAnsari/TrajectoryDiff.git
@@ -40,9 +64,13 @@ cd TrajectoryDiff
 # Create conda environment
 conda env create -f environment.yaml
 conda activate trajdiff
+```
 
-# Install in development mode (optional)
-pip install -e .
+### Verify Installation
+
+```bash
+# Run tests to verify setup
+pytest tests/ -v
 ```
 
 ## Quick Start
