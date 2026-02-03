@@ -2,9 +2,9 @@
 
 ## Current Status (Feb 2026)
 
-**Phases Complete:** 0, 1, 2 (Setup, Data Pipeline, Model Development)
-**Tests Passing:** 101
-**Ready For:** Phase 3 (Physics + Architectural Novelty) and Phase 4 (Experiments)
+**Phases Complete:** 0, 1, 2, 3 (Setup, Data Pipeline, Model Development, Physics + Architecture)
+**Tests Passing:** 143
+**Ready For:** Phase 4 (Experiments)
 
 ### What We Have
 - Complete diffusion model with trajectory conditioning
@@ -12,10 +12,12 @@
 - U-Net with condition encoder
 - Training pipeline with EMA, W&B logging
 - Evaluation metrics
+- **NEW: Physics-informed losses** (TrajectoryConsistency, CoverageWeighted, DistanceDecay)
+- **NEW: CoverageAwareAttention** (novel architectural component for ECCV/CVPR)
 
 ### What We Need
-- Physics-informed losses (strengthen the model)
-- Potential architectural novelty (strengthen the paper)
+- ~~Physics-informed losses (strengthen the model)~~ ✓ DONE
+- ~~Potential architectural novelty (strengthen the paper)~~ ✓ DONE
 - Comprehensive experiments (prove our claims)
 
 ---
@@ -119,11 +121,11 @@ class TrajectoryConsistencyLoss(nn.Module):
 ```
 
 **Tasks:**
-- [ ] Create `src/training/losses.py`
-- [ ] Implement `TrajectoryConsistencyLoss`
+- [x] Create `src/training/losses.py`
+- [x] Implement `TrajectoryConsistencyLoss`
 - [ ] Add to training loop in `diffusion_module.py`
 - [ ] Add `trajectory_consistency_weight` to config
-- [ ] Write tests in `tests/test_losses.py`
+- [x] Write tests in `tests/test_losses.py`
 
 ---
 
@@ -168,7 +170,7 @@ class CoverageWeightedLoss(nn.Module):
 ```
 
 **Tasks:**
-- [ ] Implement `CoverageWeightedLoss`
+- [x] Implement `CoverageWeightedLoss`
 - [ ] Option to use instead of standard MSE in training
 - [ ] Ablation: compare with/without coverage weighting
 
@@ -245,9 +247,9 @@ class DistanceDecayLoss(nn.Module):
 ```
 
 **Tasks:**
-- [ ] Implement `DistanceDecayLoss`
+- [x] Implement `DistanceDecayLoss`
 - [ ] Add as optional regularization term
-- [ ] Test on synthetic data where we know ground truth
+- [x] Test on synthetic data where we know ground truth
 
 ---
 
@@ -422,11 +424,11 @@ class CoverageAwareTransformerBlock(nn.Module):
 ```
 
 **Tasks:**
-- [ ] Create `src/models/diffusion/attention.py`
-- [ ] Implement `CoverageAwareAttention`
+- [x] Create `src/models/diffusion/attention.py`
+- [x] Implement `CoverageAwareAttention`
 - [ ] Integrate into U-Net's attention blocks
 - [ ] Pass coverage_density through the network
-- [ ] Write tests
+- [x] Write tests
 - [ ] Ablation: with/without coverage-aware attention
 
 ---
@@ -1140,9 +1142,10 @@ python scripts/generate_figures.py --results-dir results/ --output-dir figures/
 ## File Checklist
 
 ### Phase 3 Files to Create
-- [ ] `src/training/losses.py`
-- [ ] `src/models/diffusion/attention.py` (optional)
-- [ ] `tests/test_losses.py`
+- [x] `src/training/losses.py`
+- [x] `src/models/diffusion/attention.py` (novel CoverageAwareAttention)
+- [x] `tests/test_losses.py`
+- [x] `tests/test_attention.py`
 - [ ] `configs/training/with_physics.yaml`
 
 ### Phase 4 Files to Create

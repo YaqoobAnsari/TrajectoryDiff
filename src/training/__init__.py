@@ -24,6 +24,15 @@ from .callbacks import (
     GradientMonitor,
 )
 
+from .losses import (
+    TrajectoryConsistencyLoss,
+    CoverageWeightedLoss,
+    DistanceDecayLoss,
+    WallAttenuationLoss,
+    TrajectoryDiffLoss,
+    compute_physics_losses,
+)
+
 __all__ = [
     # Training
     'DiffusionModule',
@@ -39,4 +48,11 @@ __all__ = [
     'MetricsLogger',
     'CheckpointEveryNSteps',
     'GradientMonitor',
+    # Losses
+    'TrajectoryConsistencyLoss',
+    'CoverageWeightedLoss',
+    'DistanceDecayLoss',
+    'WallAttenuationLoss',
+    'TrajectoryDiffLoss',
+    'compute_physics_losses',
 ]

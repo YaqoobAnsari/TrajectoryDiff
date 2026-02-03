@@ -25,6 +25,15 @@ from .unet import (
     count_parameters,
 )
 
+from .attention import (
+    CoverageAwareAttention,
+    CoverageAwareTransformerBlock,
+    CoverageAwareAttentionBlock,
+    AdaptiveCoverageAttention,
+    downsample_coverage,
+    upsample_coverage,
+)
+
 __all__ = [
     # DDPM
     'GaussianDiffusion',
@@ -42,4 +51,11 @@ __all__ = [
     'AttentionBlock',
     'get_unet',
     'count_parameters',
+    # Coverage-Aware Attention
+    'CoverageAwareAttention',
+    'CoverageAwareTransformerBlock',
+    'CoverageAwareAttentionBlock',
+    'AdaptiveCoverageAttention',
+    'downsample_coverage',
+    'upsample_coverage',
 ]
