@@ -7,6 +7,16 @@ Usage:
     python scripts/train.py experiment=trajectory_baseline  # Named experiment
     python scripts/train.py data.loader.batch_size=32      # Override params
     python scripts/train.py -m model.unet.base_channels=32,64  # Multirun
+
+Examples:
+    # Quick test run
+    python scripts/train.py training.max_epochs=2 data.loader.batch_size=4
+
+    # Full training with W&B
+    python scripts/train.py logging.wandb.enabled=true experiment.name=baseline_v1
+
+    # Resume from checkpoint
+    python scripts/train.py +ckpt_path=/path/to/checkpoint.ckpt
 """
 
 import os
@@ -28,20 +38,25 @@ from lightning.pytorch.callbacks import (
 from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
 from omegaconf import DictConfig, OmegaConf
 
-from data.datamodule import RadioMapDataModule
-from training.trainer import TrajectoryDiffusionModule
-from utils.io import save_config
+from data import RadioMapDataModule
+from training import (
+    DiffusionModule,
+    WandBSampleLogger,
+    MetricsLogger,
+    GradientMonitor,
+)
 
 
 def setup_callbacks(cfg: DictConfig) -> list:
     """Setup training callbacks."""
     callbacks = []
-    
+
     # Checkpointing
+    ckpt_dir = Path(hydra.core.hydra_config.HydraConfig.get().runtime.output_dir) / "checkpoints"
     callbacks.append(
         ModelCheckpoint(
-            dirpath=os.path.join(cfg.paths.output_dir, "checkpoints"),
-            filename="epoch={epoch:03d}-val_rmse={val/rmse:.4f}",
+            dirpath=str(ckpt_dir),
+            filename="epoch={epoch:03d}-val_loss={val/loss:.4f}",
             save_top_k=cfg.training.checkpoint.save_top_k,
             monitor=cfg.training.checkpoint.monitor,
             mode=cfg.training.checkpoint.mode,
@@ -49,7 +64,7 @@ def setup_callbacks(cfg: DictConfig) -> list:
             auto_insert_metric_name=False,
         )
     )
-    
+
     # Early stopping
     if cfg.training.early_stopping.enabled:
         callbacks.append(
@@ -60,30 +75,52 @@ def setup_callbacks(cfg: DictConfig) -> list:
                 min_delta=cfg.training.early_stopping.min_delta,
             )
         )
-    
+
     # Learning rate monitor
     callbacks.append(LearningRateMonitor(logging_interval="step"))
-    
+
     # Progress bar
     callbacks.append(RichProgressBar())
-    
+
+    # Gradient monitoring
+    callbacks.append(GradientMonitor(log_every_n_steps=100))
+
+    # Sample logging (if W&B enabled)
+    if cfg.logging.wandb.enabled:
+        callbacks.append(
+            WandBSampleLogger(
+                every_n_epochs=5,
+                num_samples=4,
+                use_ddim=True,
+            )
+        )
+
+    # Metrics computation
+    callbacks.append(
+        MetricsLogger(
+            compute_every_n_epochs=1,
+            num_eval_samples=50,
+        )
+    )
+
     return callbacks
 
 
 def setup_loggers(cfg: DictConfig) -> list:
     """Setup experiment loggers."""
     loggers = []
-    
+    log_dir = Path(hydra.core.hydra_config.HydraConfig.get().runtime.output_dir)
+
     # TensorBoard
     if cfg.logging.tensorboard.enabled:
         loggers.append(
             TensorBoardLogger(
-                save_dir=cfg.paths.log_dir,
+                save_dir=str(log_dir),
                 name="tensorboard",
-                version=cfg.experiment.name,
+                version="",
             )
         )
-    
+
     # Weights & Biases
     if cfg.logging.wandb.enabled:
         loggers.append(
@@ -91,40 +128,112 @@ def setup_loggers(cfg: DictConfig) -> list:
                 project=cfg.logging.wandb.project,
                 entity=cfg.logging.wandb.entity,
                 name=cfg.experiment.name,
-                save_dir=cfg.paths.log_dir,
+                save_dir=str(log_dir),
                 offline=cfg.logging.wandb.offline,
-                tags=cfg.experiment.tags,
+                tags=list(cfg.experiment.tags) if cfg.experiment.tags else None,
                 config=OmegaConf.to_container(cfg, resolve=True),
             )
         )
-    
+
     return loggers if loggers else None
+
+
+def create_model(cfg: DictConfig) -> DiffusionModule:
+    """Create diffusion model from config."""
+    # Map config to DiffusionModule parameters
+    model_cfg = cfg.model
+
+    # Determine U-Net size from base_channels
+    base_ch = model_cfg.unet.base_channels
+    if base_ch <= 32:
+        unet_size = 'small'
+    elif base_ch <= 64:
+        unet_size = 'medium'
+    else:
+        unet_size = 'large'
+
+    return DiffusionModule(
+        # Model config
+        unet_size=unet_size,
+        image_size=cfg.data.image.height,
+        condition_channels=model_cfg.unet.base_channels,
+        # Diffusion config
+        num_timesteps=model_cfg.diffusion.num_timesteps,
+        beta_schedule=model_cfg.diffusion.beta_schedule,
+        prediction_type=model_cfg.diffusion.prediction_type,
+        loss_type=model_cfg.diffusion.loss_type,
+        # Training config
+        learning_rate=cfg.training.optimizer.lr,
+        weight_decay=cfg.training.optimizer.weight_decay,
+        warmup_steps=cfg.training.scheduler.warmup_epochs * 100,  # Approximate
+        max_steps=cfg.training.max_steps or cfg.training.max_epochs * 1000,
+        use_ema=True,
+        ema_decay=0.9999,
+        # Sampling config
+        ddim_steps=model_cfg.diffusion.ddim_steps,
+    )
+
+
+def create_datamodule(cfg: DictConfig) -> RadioMapDataModule:
+    """Create data module from config."""
+    return RadioMapDataModule(
+        data_root=cfg.data.dataset.root,
+        batch_size=cfg.data.loader.batch_size,
+        num_workers=cfg.data.loader.num_workers,
+        image_size=cfg.data.image.height,
+        train_split=cfg.data.splits.train,
+        val_split=cfg.data.splits.val,
+        augment=cfg.data.augmentation.enabled,
+        sampling_strategy=cfg.data.sampling.strategy,
+        num_trajectories=cfg.data.sampling.trajectory.num_trajectories,
+        points_per_trajectory=cfg.data.sampling.trajectory.points_per_trajectory,
+        rss_noise_std=cfg.data.sampling.trajectory.rss_noise_std,
+    )
 
 
 @hydra.main(version_base="1.3", config_path="../configs", config_name="config")
 def main(cfg: DictConfig) -> float:
     """Main training function."""
-    
+
     # Print config
+    print("=" * 60)
+    print("TrajectoryDiff Training")
+    print("=" * 60)
     print(OmegaConf.to_yaml(cfg))
-    
+
     # Set seed for reproducibility
     L.seed_everything(cfg.experiment.seed, workers=True)
-    
-    # Save config
-    save_config(cfg, os.path.join(cfg.paths.output_dir, "config.yaml"))
-    
+
+    # Create output directory
+    output_dir = Path(hydra.core.hydra_config.HydraConfig.get().runtime.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save resolved config
+    config_path = output_dir / "config.yaml"
+    with open(config_path, 'w') as f:
+        OmegaConf.save(cfg, f)
+    print(f"\nConfig saved to: {config_path}")
+
     # Setup data module
-    datamodule = RadioMapDataModule(cfg)
-    
+    print("\nSetting up data module...")
+    datamodule = create_datamodule(cfg)
+
     # Setup model
-    model = TrajectoryDiffusionModule(cfg)
-    
+    print("Setting up model...")
+    model = create_model(cfg)
+
+    # Print model summary
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total parameters: {total_params:,}")
+    print(f"Trainable parameters: {trainable_params:,}")
+
     # Setup callbacks and loggers
     callbacks = setup_callbacks(cfg)
     loggers = setup_loggers(cfg)
-    
+
     # Setup trainer
+    print("\nSetting up trainer...")
     trainer = L.Trainer(
         accelerator=cfg.hardware.accelerator,
         devices=cfg.hardware.devices,
@@ -138,18 +247,28 @@ def main(cfg: DictConfig) -> float:
         deterministic=cfg.training.deterministic,
         callbacks=callbacks,
         logger=loggers,
-        default_root_dir=cfg.paths.output_dir,
+        default_root_dir=str(output_dir),
     )
-    
+
+    # Resume from checkpoint if provided
+    ckpt_path = cfg.get('ckpt_path', None)
+
     # Train
-    trainer.fit(model, datamodule=datamodule)
-    
+    print("\nStarting training...")
+    print("=" * 60)
+    trainer.fit(model, datamodule=datamodule, ckpt_path=ckpt_path)
+
     # Test with best checkpoint
-    if trainer.checkpoint_callback.best_model_path:
+    best_ckpt = trainer.checkpoint_callback.best_model_path
+    if best_ckpt:
+        print(f"\nTesting with best checkpoint: {best_ckpt}")
         trainer.test(model, datamodule=datamodule, ckpt_path="best")
-    
+
     # Return best validation metric for hyperparameter optimization
-    return trainer.callback_metrics.get("val/rmse", float("inf"))
+    val_loss = trainer.callback_metrics.get("val/loss", float("inf"))
+    print(f"\nBest validation loss: {val_loss}")
+
+    return float(val_loss)
 
 
 if __name__ == "__main__":
