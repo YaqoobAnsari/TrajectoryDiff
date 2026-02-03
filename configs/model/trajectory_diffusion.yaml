@@ -1,0 +1,60 @@
+# TrajectoryDiff Model Configuration
+# Trajectory-conditioned diffusion model for radio map generation
+
+name: trajectory_diffusion
+
+# Model type: diffusion | supervised | radio_unet | rmdm
+model_type: diffusion
+
+# Input/output channels
+# Radio map is 1 channel; conditioning is fused by ConditionEncoder (separate)
+in_channels: 1
+out_channels: 1
+
+# Condition encoder output channels (fused conditioning -> UNet)
+condition_channels: 64
+
+# Diffusion parameters
+diffusion:
+  num_timesteps: 1000
+  beta_schedule: cosine  # linear | cosine | sigmoid
+  prediction_type: epsilon  # epsilon | x0 | v
+  loss_type: mse  # mse | l1 | huber
+
+  # DDIM sampling
+  ddim_steps: 50
+
+# U-Net backbone size preset
+unet:
+  size: medium  # small | medium | large
+
+# Conditioning flags (each can be toggled for ablation)
+conditioning:
+  use_building_map: true
+  use_sparse_rss: true
+  use_trajectory_mask: true
+  use_coverage_density: true
+  use_tx_position: true
+  tx_encoding_type: gaussian  # gaussian | distance | sinusoidal
+
+# Coverage-aware attention (novel contribution)
+coverage_attention:
+  enabled: false  # Set true for CoverageAwareUNet
+  temperature: 1.0  # Higher = more uniform; lower = more coverage-dependent
+
+# Physics-informed losses (novel contribution)
+physics:
+  enabled: false  # Set true to add physics losses to training
+  trajectory_consistency:
+    weight: 0.5
+    smoothness_weight: 0.1
+  coverage_weighted: true  # Weight diffusion loss by coverage density
+  distance_decay:
+    weight: 0.1
+  warmup_epochs: 30
+  rampup_epochs: 20
+
+# Uncertainty estimation (at inference time)
+uncertainty:
+  enabled: true
+  num_samples: 10

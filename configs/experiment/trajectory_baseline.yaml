@@ -1,0 +1,28 @@
+# @package _global_
+# Experiment: Trajectory Sampling Baseline
+# Standard trajectory model without novel contributions (ablation baseline)
+
+experiment:
+  name: trajectory_baseline
+  tags: [baseline, trajectory]
+
+data:
+  sampling:
+    strategy: trajectory
+    trajectory:
+      method: mixed
+      num_trajectories: 3
+      points_per_trajectory: 100
+
+model:
+  unet:
+    size: medium
+  coverage_attention:
+    enabled: false
+  physics:
+    enabled: false
+
+training:
+  max_epochs: 200
+  optimizer:
+    lr: 1e-4

@@ -1,0 +1,27 @@
+# @package _global_
+# Experiment: Uniform Sampling Baseline
+# Uses uniform random sampling instead of trajectory sampling
+
+experiment:
+  name: uniform_baseline
+  tags: [baseline, uniform]
+
+data:
+  sampling:
+    strategy: uniform
+
+model:
+  unet:
+    size: medium
+  conditioning:
+    use_trajectory_mask: false
+    use_coverage_density: false
+  coverage_attention:
+    enabled: false
+  physics:
+    enabled: false
+
+training:
+  max_epochs: 200
+  optimizer:
+    lr: 1e-4

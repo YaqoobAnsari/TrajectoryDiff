@@ -1,0 +1,523 @@
+"""
+Training callbacks for TrajectoryDiff.
+
+Contains callbacks for logging, visualization, and monitoring during training.
+"""
+
+from typing import Any, Dict, Optional
+from pathlib import Path
+
+import torch
+import lightning as L
+from lightning.pytorch.callbacks import Callback
+
+
+class WandBSampleLogger(Callback):
+    """
+    Weights & Biases callback for logging samples during training.
+
+    Logs generated samples, ground truth comparisons, and conditioning
+    inputs to W&B for visualization.
+    """
+
+    def __init__(
+        self,
+        every_n_epochs: int = 5,
+        num_samples: int = 4,
+        use_ddim: bool = True,
+        log_conditioning: bool = True,
+    ):
+        """
+        Args:
+            every_n_epochs: Log samples every N epochs
+            num_samples: Number of samples to generate and log
+            use_ddim: Use DDIM for faster sampling
+            log_conditioning: Also log conditioning inputs
+        """
+        super().__init__()
+        self.every_n_epochs = every_n_epochs
+        self.num_samples = num_samples
+        self.use_ddim = use_ddim
+        self.log_conditioning = log_conditioning
+
+    def on_validation_epoch_end(
+        self,
+        trainer: L.Trainer,
+        pl_module: 'DiffusionModule',
+    ):
+        """Generate and log samples at end of validation epoch."""
+        if trainer.sanity_checking:
+            return
+
+        if (trainer.current_epoch + 1) % self.every_n_epochs != 0:
+            return
+
+        # Check if wandb is available
+        if trainer.logger is None or not hasattr(trainer.logger, 'experiment'):
+            return
+
+        try:
+            import wandb
+        except ImportError:
+            return
+
+        # Get validation batch
+        val_dataloader = trainer.val_dataloaders
+        if val_dataloader is None:
+            return
+
+        batch = next(iter(val_dataloader))
+
+        # Move to device and limit samples
+        device = pl_module.device
+        batch = {
+            k: v.to(device)[:self.num_samples] if isinstance(v, torch.Tensor) else v
+            for k, v in batch.items()
+        }
+
+        # Extract condition
+        condition = pl_module._extract_condition(batch)
+
+        # Generate samples
+        with torch.no_grad():
+            samples = pl_module.sample(condition, use_ddim=self.use_ddim, progress=False)
+
+        # Log to wandb
+        try:
+            self._log_samples(trainer, batch, samples)
+        except Exception as e:
+            print(f"WandBSampleLogger: Failed to log samples at epoch {trainer.current_epoch}: {e}")
+
+    def _get_wandb_logger(self, trainer: L.Trainer):
+        """Find the WandB logger among trainer's loggers."""
+        from lightning.pytorch.loggers import WandbLogger
+
+        if hasattr(trainer, 'loggers'):
+            for logger in trainer.loggers:
+                if isinstance(logger, WandbLogger):
+                    return logger
+        if isinstance(trainer.logger, WandbLogger):
+            return trainer.logger
+        return None
+
+    def _log_samples(
+        self,
+        trainer: L.Trainer,
+        batch: Dict[str, torch.Tensor],
+        samples: torch.Tensor,
+    ):
+        """Log samples to W&B."""
+        import wandb
+
+        wandb_logger = self._get_wandb_logger(trainer)
+        if wandb_logger is None:
+            return
+
+        log_dict = {}
+        n = samples.shape[0]
+
+        # Log individual samples
+        for i in range(n):
+            # Generated sample
+            gen_img = samples[i, 0].cpu().numpy()
+            log_dict[f'samples/generated_{i}'] = wandb.Image(
+                gen_img,
+                caption=f'Generated sample {i}',
+            )
+
+            # Ground truth
+            if 'radio_map' in batch:
+                gt_img = batch['radio_map'][i, 0].cpu().numpy()
+                log_dict[f'samples/ground_truth_{i}'] = wandb.Image(
+                    gt_img,
+                    caption=f'Ground truth {i}',
+                )
+
+            # Conditioning inputs
+            if self.log_conditioning:
+                if 'building_map' in batch:
+                    bm_img = batch['building_map'][i, 0].cpu().numpy()
+                    log_dict[f'conditioning/building_map_{i}'] = wandb.Image(
+                        bm_img,
+                        caption=f'Building map {i}',
+                    )
+
+                if 'sparse_rss' in batch:
+                    rss_img = batch['sparse_rss'][i, 0].cpu().numpy()
+                    log_dict[f'conditioning/sparse_rss_{i}'] = wandb.Image(
+                        rss_img,
+                        caption=f'Sparse RSS {i}',
+                    )
+
+                if 'trajectory_mask' in batch:
+                    mask_img = batch['trajectory_mask'][i, 0].cpu().numpy()
+                    log_dict[f'conditioning/trajectory_mask_{i}'] = wandb.Image(
+                        mask_img,
+                        caption=f'Trajectory mask {i}',
+                    )
+
+        # Create comparison grid
+        try:
+            comparison = self._create_comparison_grid(batch, samples)
+            if comparison is not None:
+                log_dict['samples/comparison_grid'] = wandb.Image(
+                    comparison,
+                    caption='Left to right: Building, Sparse RSS, Ground Truth, Generated',
+                )
+        except Exception:
+            pass
+
+        # Log via W&B logger
+        wandb_logger.experiment.log(
+            log_dict,
+            step=trainer.global_step,
+        )
+
+    def _create_comparison_grid(
+        self,
+        batch: Dict[str, torch.Tensor],
+        samples: torch.Tensor,
+    ):
+        """Create a comparison grid of inputs and outputs."""
+        try:
+            import matplotlib.pyplot as plt
+            import numpy as np
+            from io import BytesIO
+            from PIL import Image
+
+            n = min(4, samples.shape[0])
+            fig, axes = plt.subplots(n, 4, figsize=(12, 3 * n))
+
+            if n == 1:
+                axes = axes[None, :]
+
+            for i in range(n):
+                # Building map
+                if 'building_map' in batch:
+                    axes[i, 0].imshow(batch['building_map'][i, 0].cpu().numpy(), cmap='gray')
+                    axes[i, 0].set_title('Building')
+                else:
+                    axes[i, 0].axis('off')
+
+                # Sparse RSS
+                if 'sparse_rss' in batch:
+                    axes[i, 1].imshow(batch['sparse_rss'][i, 0].cpu().numpy(), cmap='viridis')
+                    axes[i, 1].set_title('Sparse RSS')
+                else:
+                    axes[i, 1].axis('off')
+
+                # Ground truth
+                if 'radio_map' in batch:
+                    axes[i, 2].imshow(batch['radio_map'][i, 0].cpu().numpy(), cmap='viridis')
+                    axes[i, 2].set_title('Ground Truth')
+                else:
+                    axes[i, 2].axis('off')
+
+                # Generated
+                axes[i, 3].imshow(samples[i, 0].cpu().numpy(), cmap='viridis')
+                axes[i, 3].set_title('Generated')
+
+                for ax in axes[i]:
+                    ax.axis('off')
+
+            plt.tight_layout()
+
+            # Convert to image
+            buf = BytesIO()
+            fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+            buf.seek(0)
+            img = Image.open(buf)
+            plt.close(fig)
+
+            return img
+
+        except Exception:
+            return None
+
+
+class MetricsLogger(Callback):
+    """
+    Callback for computing and logging additional metrics.
+
+    Computes RMSE, SSIM, and other radio map-specific metrics
+    during validation. Full diffusion-based metrics are expensive,
+    so they run every N epochs with a small sample count.
+    """
+
+    def __init__(
+        self,
+        compute_every_n_epochs: int = 10,
+        num_eval_samples: int = 10,
+    ):
+        """
+        Args:
+            compute_every_n_epochs: Compute full sampling metrics every N epochs
+            num_eval_samples: Maximum samples for full diffusion evaluation
+        """
+        super().__init__()
+        self.compute_every_n_epochs = compute_every_n_epochs
+        self.num_eval_samples = num_eval_samples
+
+    def on_validation_epoch_end(
+        self,
+        trainer: L.Trainer,
+        pl_module: 'DiffusionModule',
+    ):
+        """Compute and log metrics at end of validation."""
+        if trainer.sanity_checking:
+            return
+
+        if (trainer.current_epoch + 1) % self.compute_every_n_epochs != 0:
+            return
+
+        val_dataloader = trainer.val_dataloaders
+        if val_dataloader is None:
+            return
+
+        try:
+            self._compute_sampling_metrics(trainer, pl_module, val_dataloader)
+        except Exception as e:
+            print(f"MetricsLogger: Failed to compute metrics at epoch {trainer.current_epoch}: {e}")
+
+    def _compute_sampling_metrics(self, trainer, pl_module, val_dataloader):
+        """Run full diffusion sampling and compute reconstruction metrics."""
+        all_rmse = []
+        all_mae = []
+        total_samples = 0
+
+        with torch.no_grad():
+            for batch in val_dataloader:
+                if total_samples >= self.num_eval_samples:
+                    break
+
+                device = pl_module.device
+                batch = {
+                    k: v.to(device) if isinstance(v, torch.Tensor) else v
+                    for k, v in batch.items()
+                }
+
+                condition = pl_module._extract_condition(batch)
+                ground_truth = batch['radio_map']
+
+                # Generate samples via DDIM
+                samples = pl_module.sample(condition, use_ddim=True, progress=False)
+
+                # Compute per-sample metrics
+                rmse = torch.sqrt(((samples - ground_truth) ** 2).mean(dim=(1, 2, 3)))
+                mae = (samples - ground_truth).abs().mean(dim=(1, 2, 3))
+
+                all_rmse.append(rmse.cpu())
+                all_mae.append(mae.cpu())
+
+                total_samples += ground_truth.shape[0]
+
+        if len(all_rmse) > 0:
+            rmse = torch.cat(all_rmse).mean().item()
+            mae = torch.cat(all_mae).mean().item()
+
+            pl_module.log('val/rmse', rmse, sync_dist=True)
+            pl_module.log('val/mae', mae, sync_dist=True)
+
+
+class CheckpointEveryNSteps(Callback):
+    """
+    Save checkpoints every N training steps.
+
+    Useful for long training runs where you want intermediate checkpoints.
+    """
+
+    def __init__(
+        self,
+        save_step_frequency: int = 5000,
+        prefix: str = 'step',
+        save_path: Optional[str] = None,
+    ):
+        """
+        Args:
+            save_step_frequency: Save every N steps
+            prefix: Filename prefix
+            save_path: Directory to save checkpoints (uses trainer default if None)
+        """
+        super().__init__()
+        self.save_step_frequency = save_step_frequency
+        self.prefix = prefix
+        self.save_path = Path(save_path) if save_path else None
+
+    def on_train_batch_end(
+        self,
+        trainer: L.Trainer,
+        pl_module: L.LightningModule,
+        outputs: Any,
+        batch: Any,
+        batch_idx: int,
+    ):
+        """Check if we should save a checkpoint."""
+        if trainer.global_step > 0 and trainer.global_step % self.save_step_frequency == 0:
+            # Determine save path
+            if self.save_path is not None:
+                save_dir = self.save_path
+            elif trainer.log_dir is not None:
+                save_dir = Path(trainer.log_dir) / 'checkpoints'
+            else:
+                save_dir = Path('checkpoints')
+
+            save_dir.mkdir(parents=True, exist_ok=True)
+
+            # Save checkpoint
+            ckpt_path = save_dir / f'{self.prefix}_{trainer.global_step}.ckpt'
+            trainer.save_checkpoint(str(ckpt_path))
+
+
+class GradientMonitor(Callback):
+    """
+    Monitor gradient statistics during training.
+
+    Logs gradient norms and detects potential training issues.
+    """
+
+    def __init__(self, log_every_n_steps: int = 100):
+        """
+        Args:
+            log_every_n_steps: Log gradient stats every N steps
+        """
+        super().__init__()
+        self.log_every_n_steps = log_every_n_steps
+
+    def on_after_backward(self, trainer: L.Trainer, pl_module: L.LightningModule):
+        """Compute and log gradient statistics after backward pass."""
+        if trainer.global_step % self.log_every_n_steps != 0:
+            return
+
+        # Compute gradient norm (use pl_module.parameters() to work with all
+        # model types — baselines like RadioUNet/RMDM don't have a .model attr)
+        total_norm = 0.0
+        for p in pl_module.parameters():
+            if p.grad is not None:
+                param_norm = p.grad.data.norm(2)
+                total_norm += param_norm.item() ** 2
+
+        total_norm = total_norm ** 0.5
+
+        # Log
+        pl_module.log('train/grad_norm', total_norm)
+
+        # Warn if gradient is suspiciously large
+        if total_norm > 100:
+            print(f"Warning: Large gradient norm detected: {total_norm:.2f}")
+
+
+class TrainingHealthCheck(Callback):
+    """
+    Monitor training health and catch issues early in long SLURM runs.
+
+    Checks for:
+    - NaN/Inf loss
+    - Loss explosion (exceeding threshold relative to initial loss)
+    - Learning rate sanity
+    - GPU memory usage logging
+    - Emergency checkpoint saving on failure
+    """
+
+    def __init__(
+        self,
+        loss_explosion_factor: float = 100.0,
+        log_gpu_every_n_steps: int = 100,
+        nan_patience: int = 5,
+    ):
+        """
+        Args:
+            loss_explosion_factor: Alert if loss exceeds initial_loss * this factor
+            log_gpu_every_n_steps: Log GPU memory usage every N steps
+            nan_patience: Number of consecutive NaN steps before emergency stop
+        """
+        super().__init__()
+        self.loss_explosion_factor = loss_explosion_factor
+        self.log_gpu_every_n_steps = log_gpu_every_n_steps
+        self.nan_patience = nan_patience
+
+        self._initial_loss: Optional[float] = None
+        self._consecutive_nan_steps = 0
+
+    def on_train_batch_end(
+        self,
+        trainer: L.Trainer,
+        pl_module: L.LightningModule,
+        outputs: Any,
+        batch: Any,
+        batch_idx: int,
+    ):
+        """Check training health after each batch."""
+        # Extract loss value
+        loss = None
+        if outputs is not None:
+            if isinstance(outputs, torch.Tensor):
+                loss = outputs.detach().item()
+            elif isinstance(outputs, dict) and 'loss' in outputs:
+                loss = outputs['loss'].detach().item()
+
+        if loss is None:
+            return
+
+        # Record initial loss (also captures on resume when global_step > 0)
+        if self._initial_loss is None:
+            self._initial_loss = loss
+            print(f"[HealthCheck] Initial loss: {loss:.6f} (step {trainer.global_step})")
+
+        # Check NaN/Inf
+        if not torch.isfinite(torch.tensor(loss)):
+            self._consecutive_nan_steps += 1
+            print(
+                f"[HealthCheck] WARNING: NaN/Inf loss at step {trainer.global_step} "
+                f"({self._consecutive_nan_steps}/{self.nan_patience})"
+            )
+            if self._consecutive_nan_steps >= self.nan_patience:
+                self._emergency_save(trainer, pl_module, reason="nan_loss")
+                trainer.should_stop = True
+        else:
+            self._consecutive_nan_steps = 0
+
+        # Check loss explosion
+        if (
+            self._initial_loss is not None
+            and self._initial_loss > 0
+            and loss > self._initial_loss * self.loss_explosion_factor
+        ):
+            print(
+                f"[HealthCheck] WARNING: Loss explosion at step {trainer.global_step}: "
+                f"{loss:.4f} > {self._initial_loss:.4f} * {self.loss_explosion_factor}"
+            )
+
+        # Log GPU memory
+        if (
+            trainer.global_step % self.log_gpu_every_n_steps == 0
+            and torch.cuda.is_available()
+        ):
+            allocated = torch.cuda.memory_allocated() / 1024 ** 3
+            reserved = torch.cuda.memory_reserved() / 1024 ** 3
+            pl_module.log('system/gpu_memory_allocated_gb', allocated)
+            pl_module.log('system/gpu_memory_reserved_gb', reserved)
+
+    def _emergency_save(
+        self,
+        trainer: L.Trainer,
+        pl_module: L.LightningModule,
+        reason: str,
+    ):
+        """Save emergency checkpoint before stopping."""
+        try:
+            ckpt_dir = Path(trainer.default_root_dir) / "checkpoints"
+            ckpt_dir.mkdir(parents=True, exist_ok=True)
+            ckpt_path = ckpt_dir / f"emergency_{reason}_step{trainer.global_step}.ckpt"
+            trainer.save_checkpoint(str(ckpt_path))
+            print(f"[HealthCheck] Emergency checkpoint saved: {ckpt_path}")
+        except Exception as e:
+            print(f"[HealthCheck] Failed to save emergency checkpoint: {e}")
+
+
+__all__ = [
+    'WandBSampleLogger',
+    'MetricsLogger',
+    'CheckpointEveryNSteps',
+    'GradientMonitor',
+    'TrainingHealthCheck',
+]

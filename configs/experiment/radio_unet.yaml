@@ -1,0 +1,26 @@
+# @package _global_
+# Experiment: RadioUNet baseline (Levie et al., 2021)
+# Direct regression UNet with raw channel concatenation — no diffusion,
+# no learned condition encoder. Published DL baseline for radio map prediction.
+
+experiment:
+  name: radio_unet
+  tags: [baseline, radio_unet, dl]
+
+data:
+  sampling:
+    strategy: trajectory
+    trajectory:
+      method: mixed
+      num_trajectories: 3
+      points_per_trajectory: 100
+
+model:
+  model_type: radio_unet
+  unet:
+    size: medium
+
+training:
+  max_epochs: 200
+  optimizer:
+    lr: 1e-4

@@ -1,0 +1,36 @@
+# @package _global_
+# Ablation: Disable TX position conditioning
+
+experiment:
+  name: ablation_no_tx_position
+  tags: [ablation, no_tx_position]
+
+data:
+  sampling:
+    strategy: trajectory
+    trajectory:
+      method: mixed
+      num_trajectories: 3
+      points_per_trajectory: 100
+
+model:
+  unet:
+    size: medium
+  conditioning:
+    use_tx_position: false
+  coverage_attention:
+    enabled: true
+  physics:
+    enabled: true
+    trajectory_consistency:
+      weight: 0.5
+    coverage_weighted: true
+    distance_decay:
+      weight: 0.0  # Needs tx_position, so disabled
+    warmup_epochs: 30
+    rampup_epochs: 20
+
+training:
+  max_epochs: 200
+  optimizer:
+    lr: 1e-4

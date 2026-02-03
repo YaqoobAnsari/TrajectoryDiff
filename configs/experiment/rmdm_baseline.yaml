@@ -1,0 +1,31 @@
+# @package _global_
+# Experiment: RMDM baseline (Xu et al., 2025)
+# Dual-UNet diffusion with physics-conductor anchor fusion.
+# Current SOTA on RadioMapSeer, adapted to sparse trajectory setting.
+
+experiment:
+  name: rmdm_baseline
+  tags: [baseline, rmdm, dl, diffusion]
+
+data:
+  sampling:
+    strategy: trajectory
+    trajectory:
+      method: mixed
+      num_trajectories: 3
+      points_per_trajectory: 100
+
+model:
+  model_type: rmdm
+  unet:
+    size: medium
+  diffusion:
+    num_timesteps: 1000
+    beta_schedule: cosine
+    prediction_type: epsilon
+    ddim_steps: 50
+
+training:
+  max_epochs: 200
+  optimizer:
+    lr: 1e-4

@@ -1,0 +1,33 @@
+# @package _global_
+# Coverage Sweep: ~10% coverage (3 trajectories, 100 points each) -- default
+
+experiment:
+  name: coverage_sweep_10pct
+  tags: [sweep, coverage, medium]
+
+data:
+  sampling:
+    strategy: trajectory
+    trajectory:
+      method: mixed
+      num_trajectories: 3
+      points_per_trajectory: 100
+
+model:
+  unet:
+    size: medium
+  coverage_attention:
+    enabled: true
+  physics:
+    enabled: true
+    trajectory_consistency:
+      weight: 0.5
+    distance_decay:
+      weight: 0.1
+    warmup_epochs: 30
+    rampup_epochs: 20
+
+training:
+  max_epochs: 200
+  optimizer:
+    lr: 1e-4

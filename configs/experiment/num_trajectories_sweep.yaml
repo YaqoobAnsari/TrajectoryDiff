@@ -1,0 +1,34 @@
+# @package _global_
+# Trajectory Count Sweep: Vary number of trajectories
+# Use Hydra multirun: python scripts/train.py -m experiment=num_trajectories_sweep data.sampling.trajectory.num_trajectories=1,2,3,5,8
+
+experiment:
+  name: num_trajectories_sweep
+  tags: [sweep, num_trajectories]
+
+data:
+  sampling:
+    strategy: trajectory
+    trajectory:
+      method: mixed
+      num_trajectories: 3  # Override via multirun
+      points_per_trajectory: 100
+
+model:
+  unet:
+    size: medium
+  coverage_attention:
+    enabled: true
+  physics:
+    enabled: true
+    trajectory_consistency:
+      weight: 0.5
+    distance_decay:
+      weight: 0.1
+    warmup_epochs: 30
+    rampup_epochs: 20
+
+training:
+  max_epochs: 200
+  optimizer:
+    lr: 1e-4
