@@ -36,6 +36,9 @@ class RadioMapDataModule(L.LightningDataModule):
         coverage_sigma: float = 5.0,
         # Data processing
         normalize: bool = True,
+        # Caching
+        cache_radio_maps: bool = False,
+        trajectory_cache_sets: int = 0,
         # Dataloader
         batch_size: int = 16,
         num_workers: int = 4,
@@ -84,6 +87,8 @@ class RadioMapDataModule(L.LightningDataModule):
         self.rss_noise_std = rss_noise_std
         self.coverage_sigma = coverage_sigma
         self.normalize = normalize
+        self.cache_radio_maps = cache_radio_maps
+        self.trajectory_cache_sets = trajectory_cache_sets
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.pin_memory = pin_memory
@@ -122,6 +127,8 @@ class RadioMapDataModule(L.LightningDataModule):
             coverage_sigma=self.coverage_sigma,
             normalize=self.normalize,
             cache_building_maps=True,
+            cache_radio_maps=self.cache_radio_maps,
+            trajectory_cache_sets=self.trajectory_cache_sets,
         )
 
         if self.sampling_strategy == 'trajectory':
@@ -152,6 +159,14 @@ class RadioMapDataModule(L.LightningDataModule):
                 **common_kwargs
             )
 
+    def _dataloader_kwargs(self) -> dict:
+        """Common DataLoader kwargs for persistent workers and prefetching."""
+        kwargs = {}
+        if self.num_workers > 0:
+            kwargs['persistent_workers'] = True
+            kwargs['prefetch_factor'] = 3
+        return kwargs
+
     def train_dataloader(self) -> DataLoader:
         return DataLoader(
             self.train_dataset,
@@ -160,6 +175,7 @@ class RadioMapDataModule(L.LightningDataModule):
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
             drop_last=True,
+            **self._dataloader_kwargs(),
         )
 
     def val_dataloader(self) -> DataLoader:
@@ -169,6 +185,7 @@ class RadioMapDataModule(L.LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
+            **self._dataloader_kwargs(),
         )
 
     def test_dataloader(self) -> DataLoader:
@@ -178,6 +195,7 @@ class RadioMapDataModule(L.LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
+            **self._dataloader_kwargs(),
         )
 
     @property

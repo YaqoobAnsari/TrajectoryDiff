@@ -33,6 +33,15 @@ class TrajectoryConsistencyLoss(nn.Module):
         super().__init__()
         self.smoothness_weight = smoothness_weight
 
+        # Pre-register Sobel kernels as buffers (avoids re-creation every forward pass)
+        if smoothness_weight > 0:
+            self.register_buffer('sobel_x', torch.tensor(
+                [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=torch.float32
+            ).view(1, 1, 3, 3))
+            self.register_buffer('sobel_y', torch.tensor(
+                [[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=torch.float32
+            ).view(1, 1, 3, 3))
+
     def forward(
         self,
         pred_map: torch.Tensor,       # (B, 1, H, W) predicted radio map
@@ -75,20 +84,9 @@ class TrajectoryConsistencyLoss(nn.Module):
         trajectory_mask: torch.Tensor,
     ) -> torch.Tensor:
         """Compute gradient smoothness along trajectory."""
-        # Sobel gradients
-        sobel_x = torch.tensor(
-            [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]],
-            dtype=pred_map.dtype,
-            device=pred_map.device
-        ).view(1, 1, 3, 3)
-        sobel_y = torch.tensor(
-            [[-1, -2, -1], [0, 0, 0], [1, 2, 1]],
-            dtype=pred_map.dtype,
-            device=pred_map.device
-        ).view(1, 1, 3, 3)
-
-        grad_x = F.conv2d(pred_map, sobel_x, padding=1)
-        grad_y = F.conv2d(pred_map, sobel_y, padding=1)
+        # Use pre-registered Sobel buffers (cast to input dtype for mixed precision)
+        grad_x = F.conv2d(pred_map, self.sobel_x.to(pred_map.dtype), padding=1)
+        grad_y = F.conv2d(pred_map, self.sobel_y.to(pred_map.dtype), padding=1)
 
         # Only penalize high gradients ON the trajectory
         # (we want smooth predictions along the path)
@@ -157,13 +155,31 @@ class DistanceDecayLoss(nn.Module):
     - Walls cause sharp drops, not gradual decay
     """
 
-    def __init__(self, weight: float = 0.01):
+    def __init__(self, weight: float = 0.01, image_size: int = 256):
         """
         Args:
             weight: Scaling factor for this loss term
+            image_size: Expected spatial dimension for pre-computed meshgrid
         """
         super().__init__()
         self.weight = weight
+        self._cached_size = image_size
+
+        # Pre-register coordinate grids as buffers (avoids re-creation every forward)
+        y_coords = torch.linspace(0, 1, image_size)
+        x_coords = torch.linspace(0, 1, image_size)
+        yy, xx = torch.meshgrid(y_coords, x_coords, indexing='ij')
+        self.register_buffer('yy', yy)
+        self.register_buffer('xx', xx)
+
+    def _get_grid(self, H: int, W: int, device: torch.device) -> tuple:
+        """Get coordinate grids, using cached buffers when sizes match."""
+        if H == self._cached_size and W == self._cached_size:
+            return self.yy, self.xx
+        # Fallback for non-standard sizes (e.g., tests with small images)
+        y_coords = torch.linspace(0, 1, H, device=device)
+        x_coords = torch.linspace(0, 1, W, device=device)
+        return torch.meshgrid(y_coords, x_coords, indexing='ij')
 
     def forward(
         self,
@@ -183,26 +199,24 @@ class DistanceDecayLoss(nn.Module):
             Scalar penalty for physics violations
         """
         B, C, H, W = pred_map.shape
-        device = pred_map.device
 
-        # Create distance map from TX
-        y_coords = torch.linspace(0, 1, H, device=device)
-        x_coords = torch.linspace(0, 1, W, device=device)
-        yy, xx = torch.meshgrid(y_coords, x_coords, indexing='ij')
+        # Vectorized distance computation (no Python loop over batch)
+        # tx_position: (B, 2) -> (B, 1, 1) for broadcasting
+        tx_x = tx_position[:, 0].view(B, 1, 1)
+        tx_y = tx_position[:, 1].view(B, 1, 1)
 
-        distance_maps = []
-        for b in range(B):
-            tx_x, tx_y = tx_position[b]
-            dist = torch.sqrt((xx - tx_x) ** 2 + (yy - tx_y) ** 2)
-            distance_maps.append(dist)
-
-        distance_map = torch.stack(distance_maps, dim=0).unsqueeze(1)  # (B, 1, H, W)
+        # Get coordinate grids (uses cached buffers for standard size)
+        yy, xx = self._get_grid(H, W, pred_map.device)
+        distance_map = torch.sqrt(
+            (xx.unsqueeze(0) - tx_x) ** 2 +
+            (yy.unsqueeze(0) - tx_y) ** 2
+        ).unsqueeze(1)  # (B, 1, H, W)
 
         # Define near and far regions
         near_tx = distance_map < 0.3
         far_from_tx = distance_map > 0.7
 
-        # Mask out walls
+        # Mask out walls (building_map in [0,1]: 0 = free space, 1 = wall)
         free_space = building_map < 0.5
 
         # Compute mean RSS in near and far regions
@@ -213,7 +227,7 @@ class DistanceDecayLoss(nn.Module):
         far_count = far_mask.sum()
 
         if near_count == 0 or far_count == 0:
-            return torch.tensor(0.0, device=device, requires_grad=True)
+            return torch.tensor(0.0, device=pred_map.device, requires_grad=True)
 
         near_rss = pred_map[near_mask].mean()
         far_rss = pred_map[far_mask].mean()

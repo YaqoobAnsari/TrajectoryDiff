@@ -71,6 +71,8 @@ class DiffusionModule(L.LightningModule):
         sample_every_n_epochs: int = 5,
         num_samples: int = 4,
         ddim_steps: int = 50,
+        # Memory optimization
+        use_gradient_checkpointing: bool = False,
     ):
         """
         Initialize diffusion training module.
@@ -120,6 +122,12 @@ class DiffusionModule(L.LightningModule):
             use_coverage_attention=use_coverage_attention,
             coverage_temperature=coverage_temperature,
         )
+
+        # Enable gradient checkpointing for memory savings (trades compute for memory)
+        if use_gradient_checkpointing:
+            if hasattr(self.model, 'unet'):
+                self.model.unet.gradient_checkpointing = True
+            self.model.gradient_checkpointing_enable = True
 
         # Create diffusion process
         self.diffusion = GaussianDiffusion(
@@ -256,17 +264,26 @@ class DiffusionModule(L.LightningModule):
             pred_x0 = sqrt_alpha * x_t - sqrt_one_minus * pred
         return pred_x0.clamp(-1, 1)
 
-    def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
+    def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> Optional[torch.Tensor]:
         """
-        Training step.
+        Training step with OOM recovery.
 
         Args:
             batch: Dictionary containing radio_map, building_map, sparse_rss, etc.
             batch_idx: Batch index
 
         Returns:
-            Loss tensor
+            Loss tensor, or None if OOM occurred (Lightning skips the step)
         """
+        try:
+            return self._training_step_inner(batch, batch_idx)
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            self.print(f"WARNING: CUDA OOM at step {self.global_step}, skipping batch")
+            return None
+
+    def _training_step_inner(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
+        """Inner training step logic."""
         # Get ground truth radio map
         x_0 = batch['radio_map']
         B = x_0.shape[0]
@@ -347,6 +364,7 @@ class DiffusionModule(L.LightningModule):
 
         # Use EMA model for validation if available
         model = self.ema_model if self.use_ema else self.model
+        model.eval()  # Ensure EMA model is in eval mode (Lightning only manages self.model)
 
         with torch.no_grad():
             pred = model(

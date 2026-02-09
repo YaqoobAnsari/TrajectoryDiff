@@ -22,6 +22,7 @@ from .callbacks import (
     MetricsLogger,
     CheckpointEveryNSteps,
     GradientMonitor,
+    TrainingHealthCheck,
 )
 
 from .losses import (
@@ -48,6 +49,7 @@ __all__ = [
     'MetricsLogger',
     'CheckpointEveryNSteps',
     'GradientMonitor',
+    'TrainingHealthCheck',
     # Losses
     'TrajectoryConsistencyLoss',
     'CoverageWeightedLoss',

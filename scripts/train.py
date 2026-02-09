@@ -34,8 +34,9 @@ from lightning.pytorch.callbacks import (
     LearningRateMonitor,
     ModelCheckpoint,
     RichProgressBar,
+    TQDMProgressBar,
 )
-from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
+from lightning.pytorch.loggers import CSVLogger, TensorBoardLogger, WandbLogger
 from omegaconf import DictConfig, OmegaConf
 
 from data import RadioMapDataModule
@@ -44,6 +45,7 @@ from training import (
     WandBSampleLogger,
     MetricsLogger,
     GradientMonitor,
+    TrainingHealthCheck,
 )
 
 
@@ -79,8 +81,12 @@ def setup_callbacks(cfg: DictConfig) -> list:
     # Learning rate monitor
     callbacks.append(LearningRateMonitor(logging_interval="step"))
 
-    # Progress bar
-    callbacks.append(RichProgressBar())
+    # Progress bar: use TQDM on SLURM (clean file output), Rich locally
+    is_slurm = cfg.hardware.get('slurm', False) or os.environ.get('SLURM_JOB_ID') is not None
+    if is_slurm:
+        callbacks.append(TQDMProgressBar(refresh_rate=100))
+    else:
+        callbacks.append(RichProgressBar())
 
     # Gradient monitoring
     callbacks.append(GradientMonitor(log_every_n_steps=100))
@@ -103,6 +109,9 @@ def setup_callbacks(cfg: DictConfig) -> list:
         )
     )
 
+    # Training health check (NaN detection, loss explosion, GPU memory logging)
+    callbacks.append(TrainingHealthCheck(log_gpu_every_n_steps=100))
+
     return callbacks
 
 
@@ -110,6 +119,17 @@ def setup_loggers(cfg: DictConfig) -> list:
     """Setup experiment loggers."""
     loggers = []
     log_dir = Path(hydra.core.hydra_config.HydraConfig.get().runtime.output_dir)
+
+    # CSV logger (always enabled on SLURM for file-based metric tracking)
+    is_slurm = cfg.hardware.get('slurm', False) or os.environ.get('SLURM_JOB_ID') is not None
+    if is_slurm:
+        loggers.append(
+            CSVLogger(
+                save_dir=str(log_dir),
+                name="csv_logs",
+                version="",
+            )
+        )
 
     # TensorBoard
     if cfg.logging.tensorboard.enabled:
@@ -248,6 +268,11 @@ def main(cfg: DictConfig) -> float:
     # Setup model
     print("Setting up model...")
     model = create_model(cfg)
+
+    # Optional: torch.compile for GPU acceleration
+    if cfg.hardware.get('compile', False) and torch.cuda.is_available():
+        print("Compiling model with torch.compile (mode=reduce-overhead)...")
+        model.model = torch.compile(model.model, mode='reduce-overhead')
 
     # Print model summary
     total_params = sum(p.numel() for p in model.parameters())

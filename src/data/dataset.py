@@ -47,6 +47,8 @@ class RadioMapDataset(Dataset):
         coverage_sigma: float = 5.0,
         normalize: bool = True,
         cache_building_maps: bool = True,
+        cache_radio_maps: bool = False,
+        trajectory_cache_sets: int = 0,
         seed: Optional[int] = None,
     ):
         """
@@ -64,6 +66,11 @@ class RadioMapDataset(Dataset):
             coverage_sigma: Gaussian smoothing sigma for coverage density
             normalize: If True, normalize signal data to [-1, 1] for diffusion
             cache_building_maps: Cache building maps in memory
+            cache_radio_maps: Cache radio maps in memory (~3.5GB for full dataset).
+                Eliminates PNG decompression overhead on every __getitem__ call.
+            trajectory_cache_sets: Number of trajectory sets to pre-generate per sample.
+                0 = generate on-the-fly (default). >0 = pre-generate and cycle through
+                cached sets. Reduces per-sample overhead from ~30-50ms to <1ms.
             seed: Random seed for trajectory generation
         """
         self.data_dir = Path(data_dir)
@@ -74,6 +81,8 @@ class RadioMapDataset(Dataset):
         self.coverage_sigma = coverage_sigma
         self.normalize = normalize
         self.cache_building_maps = cache_building_maps
+        self.cache_radio_maps = cache_radio_maps
+        self.trajectory_cache_sets = trajectory_cache_sets
 
         # Setup paths
         self.building_dir = self.data_dir / 'png' / 'buildings_complete'
@@ -111,6 +120,10 @@ class RadioMapDataset(Dataset):
         self._building_cache: Dict[int, np.ndarray] = {}
         self._walkable_cache: Dict[int, np.ndarray] = {}
         self._antenna_cache: Dict[int, np.ndarray] = {}
+        self._radio_cache: Dict[Tuple[int, int], np.ndarray] = {}
+        # Trajectory cache: maps sample_idx -> list of (sparse_rss, mask) tuples
+        self._trajectory_cache: Dict[int, List[Tuple[np.ndarray, np.ndarray]]] = {}
+        self._trajectory_access_count: Dict[int, int] = {}
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -129,16 +142,10 @@ class RadioMapDataset(Dataset):
         antenna_positions = self._load_antenna_positions(map_id)
         tx_position = antenna_positions[tx_id]
 
-        # Generate trajectories
-        trajectories = self.trajectory_generator.generate_multiple(
-            walkable_mask,
-            radio_map,
-            n_trajectories=self.num_trajectories,
-            points_per_trajectory=self.points_per_trajectory,
+        # Generate trajectories (with optional caching)
+        sparse_rss, trajectory_mask = self._get_trajectory_data(
+            idx, walkable_mask, radio_map
         )
-
-        # Combine trajectories into sparse map
-        sparse_rss, trajectory_mask = self._combine_trajectories(trajectories)
 
         # Compute coverage density
         coverage_density = self._compute_coverage_density(trajectory_mask)
@@ -196,9 +203,18 @@ class RadioMapDataset(Dataset):
         return walkable
 
     def _load_radio_map(self, map_id: int, tx_id: int) -> np.ndarray:
-        """Load radio/pathloss map."""
+        """Load radio/pathloss map with optional caching."""
+        key = (map_id, tx_id)
+        if self.cache_radio_maps and key in self._radio_cache:
+            return self._radio_cache[key]
+
         path = self.radio_dir / f'{map_id}_{tx_id}.png'
-        return np.array(Image.open(path))
+        img = np.array(Image.open(path))
+
+        if self.cache_radio_maps:
+            self._radio_cache[key] = img
+
+        return img
 
     def _load_antenna_positions(self, map_id: int) -> np.ndarray:
         """Load antenna positions with caching."""
@@ -215,6 +231,44 @@ class RadioMapDataset(Dataset):
             self._antenna_cache[map_id] = positions
 
         return positions
+
+    def _get_trajectory_data(
+        self,
+        idx: int,
+        walkable_mask: np.ndarray,
+        radio_map: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Get trajectory sparse map and mask, using cache if enabled."""
+        if self.trajectory_cache_sets > 0:
+            # Check if we have cached trajectories for this sample
+            if idx not in self._trajectory_cache:
+                # Pre-generate multiple sets
+                self._trajectory_cache[idx] = []
+                for _ in range(self.trajectory_cache_sets):
+                    trajectories = self.trajectory_generator.generate_multiple(
+                        walkable_mask,
+                        radio_map,
+                        n_trajectories=self.num_trajectories,
+                        points_per_trajectory=self.points_per_trajectory,
+                    )
+                    sparse_rss, mask = self._combine_trajectories(trajectories)
+                    self._trajectory_cache[idx].append((sparse_rss.copy(), mask.copy()))
+                self._trajectory_access_count[idx] = 0
+
+            # Cycle through cached sets
+            count = self._trajectory_access_count[idx]
+            result = self._trajectory_cache[idx][count % self.trajectory_cache_sets]
+            self._trajectory_access_count[idx] = count + 1
+            return result
+
+        # No caching: generate on-the-fly
+        trajectories = self.trajectory_generator.generate_multiple(
+            walkable_mask,
+            radio_map,
+            n_trajectories=self.num_trajectories,
+            points_per_trajectory=self.points_per_trajectory,
+        )
+        return self._combine_trajectories(trajectories)
 
     def _combine_trajectories(
         self,

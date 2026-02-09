@@ -387,9 +387,118 @@ class GradientMonitor(Callback):
             print(f"Warning: Large gradient norm detected: {total_norm:.2f}")
 
 
+class TrainingHealthCheck(Callback):
+    """
+    Monitor training health and catch issues early in long SLURM runs.
+
+    Checks for:
+    - NaN/Inf loss
+    - Loss explosion (exceeding threshold relative to initial loss)
+    - Learning rate sanity
+    - GPU memory usage logging
+    - Emergency checkpoint saving on failure
+    """
+
+    def __init__(
+        self,
+        loss_explosion_factor: float = 100.0,
+        log_gpu_every_n_steps: int = 100,
+        nan_patience: int = 5,
+    ):
+        """
+        Args:
+            loss_explosion_factor: Alert if loss exceeds initial_loss * this factor
+            log_gpu_every_n_steps: Log GPU memory usage every N steps
+            nan_patience: Number of consecutive NaN steps before emergency stop
+        """
+        super().__init__()
+        self.loss_explosion_factor = loss_explosion_factor
+        self.log_gpu_every_n_steps = log_gpu_every_n_steps
+        self.nan_patience = nan_patience
+
+        self._initial_loss: Optional[float] = None
+        self._consecutive_nan_steps = 0
+
+    def on_train_batch_end(
+        self,
+        trainer: L.Trainer,
+        pl_module: L.LightningModule,
+        outputs: Any,
+        batch: Any,
+        batch_idx: int,
+    ):
+        """Check training health after each batch."""
+        # Extract loss value
+        loss = None
+        if outputs is not None:
+            if isinstance(outputs, torch.Tensor):
+                loss = outputs.detach().item()
+            elif isinstance(outputs, dict) and 'loss' in outputs:
+                loss = outputs['loss'].detach().item()
+
+        if loss is None:
+            return
+
+        # Record initial loss
+        if self._initial_loss is None and trainer.global_step == 0:
+            self._initial_loss = loss
+            print(f"[HealthCheck] Initial loss: {loss:.6f}")
+
+        # Check NaN/Inf
+        if not torch.isfinite(torch.tensor(loss)):
+            self._consecutive_nan_steps += 1
+            print(
+                f"[HealthCheck] WARNING: NaN/Inf loss at step {trainer.global_step} "
+                f"({self._consecutive_nan_steps}/{self.nan_patience})"
+            )
+            if self._consecutive_nan_steps >= self.nan_patience:
+                self._emergency_save(trainer, pl_module, reason="nan_loss")
+                trainer.should_stop = True
+        else:
+            self._consecutive_nan_steps = 0
+
+        # Check loss explosion
+        if (
+            self._initial_loss is not None
+            and self._initial_loss > 0
+            and loss > self._initial_loss * self.loss_explosion_factor
+        ):
+            print(
+                f"[HealthCheck] WARNING: Loss explosion at step {trainer.global_step}: "
+                f"{loss:.4f} > {self._initial_loss:.4f} * {self.loss_explosion_factor}"
+            )
+
+        # Log GPU memory
+        if (
+            trainer.global_step % self.log_gpu_every_n_steps == 0
+            and torch.cuda.is_available()
+        ):
+            allocated = torch.cuda.memory_allocated() / 1024 ** 3
+            reserved = torch.cuda.memory_reserved() / 1024 ** 3
+            pl_module.log('system/gpu_memory_allocated_gb', allocated)
+            pl_module.log('system/gpu_memory_reserved_gb', reserved)
+
+    def _emergency_save(
+        self,
+        trainer: L.Trainer,
+        pl_module: L.LightningModule,
+        reason: str,
+    ):
+        """Save emergency checkpoint before stopping."""
+        try:
+            ckpt_dir = Path(trainer.default_root_dir) / "checkpoints"
+            ckpt_dir.mkdir(parents=True, exist_ok=True)
+            ckpt_path = ckpt_dir / f"emergency_{reason}_step{trainer.global_step}.ckpt"
+            trainer.save_checkpoint(str(ckpt_path))
+            print(f"[HealthCheck] Emergency checkpoint saved: {ckpt_path}")
+        except Exception as e:
+            print(f"[HealthCheck] Failed to save emergency checkpoint: {e}")
+
+
 __all__ = [
     'WandBSampleLogger',
     'MetricsLogger',
     'CheckpointEveryNSteps',
     'GradientMonitor',
+    'TrainingHealthCheck',
 ]

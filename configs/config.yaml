@@ -23,11 +23,17 @@ experiment:
   tags: []
 
 # Hardware
+# Recommended batch sizes per H200 MIG profile:
+#   7g.141gb (full GPU): batch_size=64
+#   2g.35gb: batch_size=32
+#   1g.18gb: batch_size=16
 hardware:
   accelerator: auto  # auto, cpu, gpu, tpu
   devices: 1
-  precision: 16-mixed  # 32, 16-mixed, bf16-mixed
-  num_workers: 4
+  precision: bf16-mixed  # 32, 16-mixed, bf16-mixed (bf16 recommended for H200)
+  num_workers: 8
+  compile: false  # Enable torch.compile() for 20-40% speedup (opt-in)
+  slurm: false  # Auto-detected via SLURM_JOB_ID env var
 
 # Logging
 logging:

@@ -1,123 +1,146 @@
 #!/bin/bash
-# TrajectoryDiff: Full Experiment Suite
-# Run all experiments for ECCV paper results.
+#SBATCH --job-name=trajdiff
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:1
+#SBATCH --time=24:00:00
+#SBATCH --mem=64G
+#SBATCH --cpus-per-task=16
+#SBATCH --output=experiments/logs/%x_%A_%a.out
+#SBATCH --error=experiments/logs/%x_%A_%a.err
 #
-# Usage:
-#   bash scripts/run_experiments.sh              # Run all experiments
-#   bash scripts/run_experiments.sh trajectory_full  # Run single experiment
+# TrajectoryDiff: SLURM Training Script
+#
+# Usage (single experiment):
+#   sbatch --export=EXP_NAME=trajectory_full scripts/run_experiments.sh
+#
+# Usage (with MIG profile):
+#   sbatch --export=EXP_NAME=trajectory_full,MIG_PROFILE=7g.141gb scripts/run_experiments.sh
+#
+# Usage (with custom andrew ID for mcs-label):
+#   sbatch --mcs-label=<your_andrew_id> --export=EXP_NAME=trajectory_full scripts/run_experiments.sh
 #
 # Prerequisites:
-#   - conda activate trajdiff
+#   - conda environment 'trajdiff' created
 #   - W&B logged in: wandb login
-#   - Data at data/raw/RadioMapSeer/
+#   - Data at data/raw/
 
 set -euo pipefail
 
+# ============================================================
+# Environment Setup
+# ============================================================
+echo "=============================================="
+echo "TrajectoryDiff Training (SLURM)"
+echo "=============================================="
+echo "Job ID: ${SLURM_JOB_ID:-local}"
+echo "Node: $(hostname)"
+echo "Date: $(date)"
+echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'N/A')"
+echo ""
+
+# Activate conda environment
+source ~/.bashrc
+conda activate trajdiff || { echo "ERROR: Failed to activate conda env 'trajdiff'"; exit 1; }
+
+# Navigate to project root
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
-# Common settings
-WANDB_PROJECT="trajectorydiff"
-EPOCHS=200
-BATCH_SIZE=16
-NUM_WORKERS=8
-PRECISION="16-mixed"
+# ============================================================
+# Configuration
+# ============================================================
+EXP_NAME="${EXP_NAME:?ERROR: EXP_NAME not set. Use --export=EXP_NAME=trajectory_full}"
+MIG_PROFILE="${MIG_PROFILE:-7g.141gb}"
 
-# GPU check
-if ! python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
-    echo "ERROR: CUDA not available. Aborting."
-    exit 1
-fi
+# Set batch size based on MIG profile
+case "$MIG_PROFILE" in
+    7g.141gb)
+        BATCH_SIZE="${BATCH_SIZE:-64}"
+        NUM_WORKERS="${NUM_WORKERS:-12}"
+        ;;
+    2g.35gb)
+        BATCH_SIZE="${BATCH_SIZE:-32}"
+        NUM_WORKERS="${NUM_WORKERS:-8}"
+        ;;
+    1g.18gb)
+        BATCH_SIZE="${BATCH_SIZE:-16}"
+        NUM_WORKERS="${NUM_WORKERS:-4}"
+        ;;
+    *)
+        echo "WARNING: Unknown MIG profile '$MIG_PROFILE', using defaults"
+        BATCH_SIZE="${BATCH_SIZE:-32}"
+        NUM_WORKERS="${NUM_WORKERS:-8}"
+        ;;
+esac
 
-echo "=============================================="
-echo "TrajectoryDiff Experiment Suite"
-echo "=============================================="
-echo "Project dir: $PROJECT_DIR"
+EPOCHS="${EPOCHS:-200}"
+PRECISION="bf16-mixed"
+WANDB_PROJECT="${WANDB_PROJECT:-trajectorydiff}"
+
+echo "Experiment: $EXP_NAME"
+echo "MIG Profile: $MIG_PROFILE"
+echo "Batch Size: $BATCH_SIZE"
+echo "Workers: $NUM_WORKERS"
+echo "Precision: $PRECISION"
 echo "Epochs: $EPOCHS"
-echo "Batch size: $BATCH_SIZE"
 echo ""
 
-run_experiment() {
-    local exp_name="$1"
-    local extra_args="${2:-}"
-
-    echo "----------------------------------------------"
-    echo "Running: $exp_name"
-    echo "----------------------------------------------"
-
-    python scripts/train.py \
-        experiment="$exp_name" \
-        training.max_epochs=$EPOCHS \
-        data.loader.batch_size=$BATCH_SIZE \
-        data.loader.num_workers=$NUM_WORKERS \
-        hardware.precision=$PRECISION \
-        logging.wandb.enabled=true \
-        logging.wandb.project=$WANDB_PROJECT \
-        $extra_args \
-        2>&1 | tee "experiments/logs/${exp_name}.log"
-
-    echo "Completed: $exp_name"
-    echo ""
-}
+# ============================================================
+# Auto-resume from checkpoint
+# ============================================================
+RESUME_ARG=""
+LAST_CKPT=$(find "experiments/${EXP_NAME}" -name "last.ckpt" -type f 2>/dev/null | head -1)
+if [ -n "$LAST_CKPT" ]; then
+    echo "Resuming from checkpoint: $LAST_CKPT"
+    RESUME_ARG="+ckpt_path=${LAST_CKPT}"
+else
+    echo "Starting fresh training (no checkpoint found)"
+fi
+echo ""
 
 # Create log directory
 mkdir -p experiments/logs
 
-# If a specific experiment is requested, run only that
-if [ $# -gt 0 ]; then
-    run_experiment "$1" "${2:-}"
-    exit 0
+# ============================================================
+# GPU Check
+# ============================================================
+if ! python -c "import torch; assert torch.cuda.is_available(), 'No CUDA'" 2>/dev/null; then
+    echo "ERROR: CUDA not available. Aborting."
+    exit 1
 fi
 
-# === Main Experiments ===
+python -c "
+import torch
+print(f'PyTorch: {torch.__version__}')
+print(f'CUDA: {torch.version.cuda}')
+print(f'GPU: {torch.cuda.get_device_name(0)}')
+print(f'VRAM: {torch.cuda.get_device_properties(0).total_mem / 1024**3:.1f} GB')
+"
+echo ""
 
-# 1. Main model (all features)
-run_experiment "trajectory_full"
+# ============================================================
+# Training
+# ============================================================
+echo "Starting training at $(date)"
+echo "----------------------------------------------"
 
-# 2. Baselines
-run_experiment "trajectory_baseline"
-run_experiment "uniform_baseline"
-
-# === Ablation Studies ===
-
-# 3. Component ablations
-run_experiment "ablation_no_coverage_attention"
-run_experiment "ablation_no_physics_loss"
-run_experiment "ablation_no_trajectory_mask"
-run_experiment "ablation_no_coverage_density"
-run_experiment "ablation_no_tx_position"
-run_experiment "ablation_small_unet"
-
-# === Cross-Evaluation ===
-
-# 4. Cross-eval (train with one strategy, evaluate with the other)
-run_experiment "cross_eval_traj_to_uniform"
-run_experiment "cross_eval_uniform_to_traj"
-
-# === Coverage Sweeps ===
-
-# 5. Coverage level sweep
-run_experiment "coverage_sweep_1pct"
-run_experiment "coverage_sweep_5pct"
-run_experiment "coverage_sweep_10pct"
-run_experiment "coverage_sweep_20pct"
-
-# === Trajectory Count Sweep (via multirun) ===
-
-# 6. Vary number of trajectories
 python scripts/train.py \
-    -m \
-    experiment=num_trajectories_sweep \
-    data.sampling.trajectory.num_trajectories=1,2,3,5,8 \
+    experiment="$EXP_NAME" \
     training.max_epochs=$EPOCHS \
     data.loader.batch_size=$BATCH_SIZE \
     data.loader.num_workers=$NUM_WORKERS \
     hardware.precision=$PRECISION \
+    hardware.slurm=true \
     logging.wandb.enabled=true \
     logging.wandb.project=$WANDB_PROJECT \
-    2>&1 | tee "experiments/logs/num_trajectories_sweep.log"
+    $RESUME_ARG
 
-echo "=============================================="
-echo "All experiments completed!"
-echo "=============================================="
+EXIT_CODE=$?
+
+echo ""
+echo "----------------------------------------------"
+echo "Training finished at $(date)"
+echo "Exit code: $EXIT_CODE"
+
+exit $EXIT_CODE

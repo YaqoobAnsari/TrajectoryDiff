@@ -148,10 +148,8 @@ class AttentionBlock(nn.Module):
         qkv = qkv.permute(1, 0, 2, 4, 3)
         q, k, v = qkv[0], qkv[1], qkv[2]
 
-        attn = torch.matmul(q, k.transpose(-2, -1)) * self.scale
-        attn = F.softmax(attn, dim=-1)
-
-        out = torch.matmul(attn, v)
+        # Use F.scaled_dot_product_attention for Flash Attention on supported GPUs
+        out = F.scaled_dot_product_attention(q, k, v)
         out = out.permute(0, 1, 3, 2).reshape(B, C, H, W)
 
         out = self.proj(out)
