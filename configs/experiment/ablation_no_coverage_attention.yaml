@@ -1,11 +1,10 @@
-# Experiment: Trajectory Sampling Baseline
-# Standard trajectory model without novel contributions (ablation baseline)
+# Ablation: Disable coverage-aware attention (use standard UNet attention)
 
 # @package _global_
 
 experiment:
-  name: trajectory_baseline
-  tags: [baseline, trajectory]
+  name: ablation_no_coverage_attention
+  tags: [ablation, no_coverage_attention]
 
 data:
   sampling:
@@ -21,7 +20,12 @@ model:
   coverage_attention:
     enabled: false
   physics:
-    enabled: false
+    enabled: true
+    trajectory_consistency:
+      weight: 0.1
+    coverage_weighted: true
+    distance_decay:
+      weight: 0.01
 
 training:
   max_epochs: 200

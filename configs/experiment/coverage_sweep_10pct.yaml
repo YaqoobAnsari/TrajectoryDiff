@@ -1,11 +1,10 @@
-# Experiment: Trajectory Sampling Baseline
-# Standard trajectory model without novel contributions (ablation baseline)
+# Coverage Sweep: ~10% coverage (3 trajectories, 100 points each) -- default
 
 # @package _global_
 
 experiment:
-  name: trajectory_baseline
-  tags: [baseline, trajectory]
+  name: coverage_sweep_10pct
+  tags: [sweep, coverage, medium]
 
 data:
   sampling:
@@ -19,9 +18,9 @@ model:
   unet:
     size: medium
   coverage_attention:
-    enabled: false
+    enabled: true
   physics:
-    enabled: false
+    enabled: true
 
 training:
   max_epochs: 200

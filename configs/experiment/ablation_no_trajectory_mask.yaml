@@ -1,11 +1,10 @@
-# Experiment: Trajectory Sampling Baseline
-# Standard trajectory model without novel contributions (ablation baseline)
+# Ablation: Disable trajectory mask conditioning
 
 # @package _global_
 
 experiment:
-  name: trajectory_baseline
-  tags: [baseline, trajectory]
+  name: ablation_no_trajectory_mask
+  tags: [ablation, no_trajectory_mask]
 
 data:
   sampling:
@@ -18,10 +17,12 @@ data:
 model:
   unet:
     size: medium
+  conditioning:
+    use_trajectory_mask: false
   coverage_attention:
-    enabled: false
+    enabled: true
   physics:
-    enabled: false
+    enabled: true
 
 training:
   max_epochs: 200

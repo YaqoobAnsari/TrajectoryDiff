@@ -1,11 +1,10 @@
-# Experiment: Trajectory Sampling Baseline
-# Standard trajectory model without novel contributions (ablation baseline)
+# Ablation: Disable coverage density conditioning
 
 # @package _global_
 
 experiment:
-  name: trajectory_baseline
-  tags: [baseline, trajectory]
+  name: ablation_no_coverage_density
+  tags: [ablation, no_coverage_density]
 
 data:
   sampling:
@@ -18,10 +17,12 @@ data:
 model:
   unet:
     size: medium
+  conditioning:
+    use_coverage_density: false
   coverage_attention:
-    enabled: false
+    enabled: false  # Needs coverage_density, so disabled too
   physics:
-    enabled: false
+    enabled: true
 
 training:
   max_epochs: 200

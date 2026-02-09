@@ -1,11 +1,10 @@
-# Experiment: Trajectory Sampling Baseline
-# Standard trajectory model without novel contributions (ablation baseline)
+# Ablation: Disable physics-informed losses (standard MSE only)
 
 # @package _global_
 
 experiment:
-  name: trajectory_baseline
-  tags: [baseline, trajectory]
+  name: ablation_no_physics_loss
+  tags: [ablation, no_physics_loss]
 
 data:
   sampling:
@@ -19,7 +18,8 @@ model:
   unet:
     size: medium
   coverage_attention:
-    enabled: false
+    enabled: true
+    temperature: 1.0
   physics:
     enabled: false
 

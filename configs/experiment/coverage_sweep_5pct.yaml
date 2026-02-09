@@ -1,0 +1,28 @@
+# Coverage Sweep: ~5% coverage (2 trajectories, 80 points each)
+
+# @package _global_
+
+experiment:
+  name: coverage_sweep_5pct
+  tags: [sweep, coverage, medium_low]
+
+data:
+  sampling:
+    strategy: trajectory
+    trajectory:
+      method: mixed
+      num_trajectories: 2
+      points_per_trajectory: 80
+
+model:
+  unet:
+    size: medium
+  coverage_attention:
+    enabled: true
+  physics:
+    enabled: true
+
+training:
+  max_epochs: 200
+  optimizer:
+    lr: 1e-4

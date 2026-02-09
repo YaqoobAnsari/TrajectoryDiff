@@ -1,11 +1,10 @@
-# Experiment: Trajectory Sampling Baseline
-# Standard trajectory model without novel contributions (ablation baseline)
+# Ablation: Small UNet (efficiency vs quality trade-off)
 
 # @package _global_
 
 experiment:
-  name: trajectory_baseline
-  tags: [baseline, trajectory]
+  name: ablation_small_unet
+  tags: [ablation, small_unet]
 
 data:
   sampling:
@@ -17,13 +16,13 @@ data:
 
 model:
   unet:
-    size: medium
+    size: small
   coverage_attention:
-    enabled: false
+    enabled: true
   physics:
-    enabled: false
+    enabled: true
 
 training:
   max_epochs: 200
   optimizer:
-    lr: 1e-4
+    lr: 2e-4

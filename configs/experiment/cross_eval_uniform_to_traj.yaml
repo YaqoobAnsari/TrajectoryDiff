@@ -1,11 +1,11 @@
-# Experiment: Uniform Sampling Baseline
-# Uses uniform random sampling instead of trajectory sampling
+# Cross-Evaluation: Train on uniform sampling, evaluate on trajectory
+# Tests how uniform-trained model handles trajectory coverage gaps
 
 # @package _global_
 
 experiment:
-  name: uniform_baseline
-  tags: [baseline, uniform]
+  name: cross_eval_uniform_to_traj
+  tags: [cross_eval, train_uniform, eval_trajectory]
 
 data:
   sampling:

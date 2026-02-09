@@ -1,11 +1,10 @@
-# Experiment: Trajectory Sampling Baseline
-# Standard trajectory model without novel contributions (ablation baseline)
+# Ablation: Disable TX position conditioning
 
 # @package _global_
 
 experiment:
-  name: trajectory_baseline
-  tags: [baseline, trajectory]
+  name: ablation_no_tx_position
+  tags: [ablation, no_tx_position]
 
 data:
   sampling:
@@ -18,10 +17,14 @@ data:
 model:
   unet:
     size: medium
+  conditioning:
+    use_tx_position: false
   coverage_attention:
-    enabled: false
+    enabled: true
   physics:
-    enabled: false
+    enabled: true
+    distance_decay:
+      weight: 0.0  # Needs tx_position, so disabled
 
 training:
   max_epochs: 200
