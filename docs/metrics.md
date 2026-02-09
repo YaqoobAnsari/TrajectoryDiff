@@ -55,6 +55,24 @@ metrics = compute_all_metrics(pred, target, pred_std=std)
 print(f"Calibration error: {metrics['calibration_error']:.4f}")
 ```
 
+### dBm-Scale Metrics (for papers)
+
+The evaluation script (`scripts/evaluate.py`) denormalizes predictions from [-1, 1] back to dBm before computing RMSE and MAE. This produces paper-ready metrics:
+
+```python
+from src.training.inference import denormalize_radio_map
+
+# Denormalize: [-1, 1] -> [0, 255] -> dBm
+samples_dbm = denormalize_radio_map(samples)
+gt_dbm = denormalize_radio_map(ground_truth)
+
+# RMSE/MAE in dBm scale (meaningful for radio propagation)
+rmse_dbm = compute_rmse(samples_dbm, gt_dbm)
+
+# PSNR/SSIM stay in normalized space (standard practice)
+psnr = compute_psnr(samples, ground_truth)
+```
+
 ## Interpretation Guide
 
 ### RMSE Ranges (for pathloss in dB)

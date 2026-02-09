@@ -2,23 +2,31 @@
 
 ## Current Status (Feb 2026)
 
-**Phases Complete:** 0, 1, 2, 3 (Setup, Data Pipeline, Model Development, Physics + Architecture)
-**Tests Passing:** 143
-**Ready For:** Phase 4 (Experiments)
+**Version:** v0.4.0-experiment-ready
+**Phases Complete:** 0, 1, 2, 3 (Setup, Data, Model, Physics/Architecture + Bug Fixes + Integration)
+**Tests Passing:** 199 (9 test files)
+**Ready For:** GPU training on SLURM cluster (deepnet2 H200)
 
 ### What We Have
 - Complete diffusion model with trajectory conditioning
-- DDPM/DDIM sampling
-- U-Net with condition encoder
-- Training pipeline with EMA, W&B logging
-- Evaluation metrics
-- **NEW: Physics-informed losses** (TrajectoryConsistency, CoverageWeighted, DistanceDecay)
-- **NEW: CoverageAwareAttention** (novel architectural component for ECCV/CVPR)
+- DDPM/DDIM sampling with 3 noise schedules (linear, cosine, sigmoid)
+- UNet backbone (Small/Medium/Large variants)
+- **CoverageAwareUNet** with coverage-modulated attention (ECCV novelty)
+- **Physics-informed losses** (TrajectoryConsistency, CoverageWeighted, DistanceDecay)
+- 5-channel conditioning (building map, sparse RSS, trajectory mask, coverage density, TX position)
+- Training pipeline with EMA, warmup+cosine LR, W&B logging
+- Evaluation with dBm-scale metrics
+- **16 experiment configs** (ablations, cross-eval, coverage/trajectory sweeps)
+- **SLURM training scripts** for H200 GPUs
+- Smoke tested with real RadioMapSeer data
 
 ### What We Need
-- ~~Physics-informed losses (strengthen the model)~~ ✓ DONE
-- ~~Potential architectural novelty (strengthen the paper)~~ ✓ DONE
-- Comprehensive experiments (prove our claims)
+- ~~Physics-informed losses~~ ✅ DONE
+- ~~Architectural novelty (CoverageAwareUNet)~~ ✅ DONE
+- ~~Bug fixes and integration~~ ✅ DONE (8 critical bugs fixed)
+- ~~Experiment configs~~ ✅ DONE (16 configs)
+- Run experiments on GPU cluster
+- Analyze results and write paper
 
 ---
 
@@ -123,8 +131,8 @@ class TrajectoryConsistencyLoss(nn.Module):
 **Tasks:**
 - [x] Create `src/training/losses.py`
 - [x] Implement `TrajectoryConsistencyLoss`
-- [ ] Add to training loop in `diffusion_module.py`
-- [ ] Add `trajectory_consistency_weight` to config
+- [x] Add to training loop in `diffusion_module.py`
+- [x] Add `trajectory_consistency_weight` to config
 - [x] Write tests in `tests/test_losses.py`
 
 ---
@@ -171,8 +179,8 @@ class CoverageWeightedLoss(nn.Module):
 
 **Tasks:**
 - [x] Implement `CoverageWeightedLoss`
-- [ ] Option to use instead of standard MSE in training
-- [ ] Ablation: compare with/without coverage weighting
+- [x] Option to use instead of standard MSE in training
+- [x] Ablation config: `configs/experiment/ablation_no_physics_loss.yaml`
 
 ---
 
@@ -248,7 +256,7 @@ class DistanceDecayLoss(nn.Module):
 
 **Tasks:**
 - [x] Implement `DistanceDecayLoss`
-- [ ] Add as optional regularization term
+- [x] Add as optional regularization term (via `use_physics_losses` flag)
 - [x] Test on synthetic data where we know ground truth
 
 ---
@@ -426,10 +434,10 @@ class CoverageAwareTransformerBlock(nn.Module):
 **Tasks:**
 - [x] Create `src/models/diffusion/attention.py`
 - [x] Implement `CoverageAwareAttention`
-- [ ] Integrate into U-Net's attention blocks
-- [ ] Pass coverage_density through the network
-- [x] Write tests
-- [ ] Ablation: with/without coverage-aware attention
+- [x] Integrate into CoverageAwareUNet (`src/models/diffusion/coverage_unet.py`)
+- [x] Pass coverage_density through encoder/middle/decoder
+- [x] Write tests (`tests/test_coverage_unet.py`, `tests/test_attention.py`)
+- [x] Ablation config: `configs/experiment/ablation_no_coverage_attention.yaml`
 
 ---
 
@@ -1141,18 +1149,33 @@ python scripts/generate_figures.py --results-dir results/ --output-dir figures/
 
 ## File Checklist
 
-### Phase 3 Files to Create
-- [x] `src/training/losses.py`
-- [x] `src/models/diffusion/attention.py` (novel CoverageAwareAttention)
+### Phase 3 Files Created
+- [x] `src/training/losses.py` - TrajectoryDiffLoss with 3 physics losses
+- [x] `src/models/diffusion/attention.py` - CoverageAwareAttention
+- [x] `src/models/diffusion/coverage_unet.py` - CoverageAwareUNet (Small/Medium/Large)
 - [x] `tests/test_losses.py`
 - [x] `tests/test_attention.py`
-- [ ] `configs/training/with_physics.yaml`
+- [x] `tests/test_coverage_unet.py`
+- [x] `tests/test_integration.py`
 
-### Phase 4 Files to Create
-- [ ] `configs/experiment/baseline_trajectory.yaml`
-- [ ] `configs/experiment/baseline_uniform.yaml`
-- [ ] `configs/experiment/ablation_*.yaml` (multiple)
-- [ ] `scripts/run_baselines.py`
-- [ ] `scripts/analyze_uncertainty.py`
-- [ ] `scripts/generate_figures.py`
-- [ ] `notebooks/analysis.ipynb`
+### Phase 4 Files Created
+- [x] `configs/experiment/trajectory_full.yaml`
+- [x] `configs/experiment/trajectory_baseline.yaml`
+- [x] `configs/experiment/uniform_baseline.yaml`
+- [x] `configs/experiment/ablation_no_coverage_attention.yaml`
+- [x] `configs/experiment/ablation_no_physics_loss.yaml`
+- [x] `configs/experiment/ablation_no_trajectory_mask.yaml`
+- [x] `configs/experiment/ablation_no_coverage_density.yaml`
+- [x] `configs/experiment/ablation_no_tx_position.yaml`
+- [x] `configs/experiment/ablation_small_unet.yaml`
+- [x] `configs/experiment/cross_eval_traj_to_uniform.yaml`
+- [x] `configs/experiment/cross_eval_uniform_to_traj.yaml`
+- [x] `configs/experiment/coverage_sweep_{1,5,10,20}pct.yaml`
+- [x] `configs/experiment/num_trajectories_sweep.yaml`
+- [x] `scripts/run_experiments.sh` - SLURM training script
+- [x] `scripts/run_evaluation.sh` - Batch evaluation
+- [x] `scripts/smoke_test_quick.py` - Fast pipeline verification
+- [ ] `scripts/run_baselines.py` - Classical baseline evaluation
+- [ ] `scripts/analyze_uncertainty.py` - Uncertainty calibration
+- [ ] `scripts/generate_figures.py` - Paper figure generation
+- [ ] `notebooks/analysis.ipynb` - Results analysis

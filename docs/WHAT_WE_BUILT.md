@@ -7,6 +7,8 @@
 4. [Training Pipeline](#training-pipeline)
 5. [What Makes This Novel](#novelty)
 6. [Current Limitations](#limitations)
+7. [CoverageAwareUNet (Novel)](#coverage-unet)
+8. [Physics-Informed Losses](#physics-losses)
 
 ---
 
@@ -647,6 +649,95 @@ Diffusion models are slow:
 
 ---
 
+## 7. CoverageAwareUNet (Novel Contribution) <a name="coverage-unet"></a>
+
+### Location: `src/models/diffusion/coverage_unet.py`
+
+**Key Insight**: Standard attention in diffusion UNets treats all spatial positions equally. But with trajectory-sampled data, we know WHERE data exists (high coverage) and WHERE it doesn't (blind spots). CoverageAwareAttention uses this information.
+
+### How It Works
+
+```python
+class CoverageAwareAttentionBlock(nn.Module):
+    """
+    Replaces standard AttentionBlock in the UNet.
+
+    1. Receives coverage density (downsampled to match feature resolution)
+    2. Modulates attention weights via a learned coverage gate
+    3. High-coverage keys get higher attention (trust observed data)
+    4. Low-coverage keys get lower attention (explore blind spots)
+    """
+
+    def forward(self, x, coverage=None):
+        # Standard self-attention: Q, K, V projections
+        attn = Q @ K.T / sqrt(d_k)
+
+        # NOVEL: Coverage modulation
+        if coverage is not None:
+            coverage_gate = sigmoid(linear(coverage))  # Learned per-head scaling
+            attn = attn * coverage_gate  # Boost attention to high-coverage keys
+
+        attn = softmax(attn)
+        return attn @ V
+```
+
+### Architecture
+
+```
+CoverageAwareUNet extends standard UNet:
+
+ENCODER:
+    Level 1: ResBlock → ResBlock → Downsample
+    Level 2: ResBlock → ResBlock → Downsample
+    Level 3: ResBlock → CoverageAwareAttention(coverage↓) → Downsample
+    Level 4: ResBlock → CoverageAwareAttention(coverage↓↓) → Downsample
+
+MIDDLE:
+    ResBlock → CoverageAwareAttention(coverage↓↓↓) → ResBlock
+
+DECODER:
+    Level 4: Upsample → ResBlock + Skip → CoverageAwareAttention
+    Level 3: Upsample → ResBlock + Skip → CoverageAwareAttention
+    Level 2: Upsample → ResBlock + Skip
+    Level 1: Upsample → ResBlock + Skip → Output
+
+Coverage is downsampled via F.interpolate to match each attention resolution.
+```
+
+### Toggle: `use_coverage_attention=True/False`
+
+When False, the model uses standard UNet (for ablation comparison).
+
+---
+
+## 8. Physics-Informed Losses <a name="physics-losses"></a>
+
+### Location: `src/training/losses.py`
+
+### TrajectoryDiffLoss (Combined Loss)
+
+```python
+total_loss = diffusion_loss                           # Standard DDPM noise prediction MSE
+           + trajectory_consistency_weight * traj_loss  # Accuracy on observed trajectories
+           + distance_decay_weight * dist_loss          # Signal decreases with TX distance
+```
+
+If `coverage_weighted=True`, the diffusion loss is weighted by coverage density (stricter on observed regions).
+
+### Individual Losses
+
+**TrajectoryConsistencyLoss**: Predictions must match observations along trajectory paths. Uses bilinear interpolation for sub-pixel accuracy. Optionally enforces local smoothness via Sobel gradients.
+
+**CoverageWeightedLoss**: Per-pixel MSE weighted by coverage density. High-coverage regions get higher weight (model must be accurate where we have data).
+
+**DistanceDecayLoss**: Soft regularization — signal should generally decrease with distance from TX. Penalizes cases where far-from-TX signal exceeds near-TX signal (in free space only).
+
+### Toggle: `use_physics_losses=True/False`
+
+When False, standard MSE only (for ablation comparison).
+
+---
+
 ## Quick Reference: File Locations
 
 | Component | File |
@@ -655,9 +746,14 @@ Diffusion models are slow:
 | Data module | `src/data/datamodule.py` |
 | DDPM/DDIM | `src/models/diffusion/ddpm.py` |
 | U-Net | `src/models/diffusion/unet.py` |
+| **CoverageAwareUNet** | `src/models/diffusion/coverage_unet.py` |
+| **CoverageAwareAttention** | `src/models/diffusion/attention.py` |
 | Condition encoder | `src/models/encoders/condition_encoder.py` |
 | Training module | `src/training/diffusion_module.py` |
+| **Physics losses** | `src/training/losses.py` |
 | Inference | `src/training/inference.py` |
 | Metrics | `src/evaluation/metrics.py` |
 | Train script | `scripts/train.py` |
 | Eval script | `scripts/evaluate.py` |
+| Smoke test | `scripts/smoke_test_quick.py` |
+| SLURM launcher | `scripts/run_experiments.sh` |

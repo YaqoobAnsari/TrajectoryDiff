@@ -5,6 +5,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch 2.0+](https://img.shields.io/badge/pytorch-2.0+-orange.svg)](https://pytorch.org/)
 [![Lightning](https://img.shields.io/badge/lightning-2.0+-purple.svg)](https://lightning.ai/)
+[![Tests](https://img.shields.io/badge/tests-199%20passing-green.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Overview
@@ -13,7 +14,7 @@ TrajectoryDiff is a research project exploring **trajectory-conditioned diffusio
 
 ### The Problem
 
-Existing radio map generation methods assume **uniformly random sampling** — measurements scattered randomly across the space. In reality, radio measurements come from **trajectories** — paths people actually walk:
+Existing radio map generation methods assume **uniformly random sampling** -- measurements scattered randomly across the space. In reality, radio measurements come from **trajectories** -- paths people actually walk:
 
 - Corridors and walkable areas have dense samples
 - Locked rooms and restricted areas have **zero samples**
@@ -25,21 +26,19 @@ This mismatch between assumption and reality degrades performance.
 
 TrajectoryDiff explicitly models the **trajectory structure** of real-world sampling:
 
-1. **Trajectory Encoder**: Captures temporal correlation and path geometry
-2. **Coverage-Aware Conditioning**: Model knows where data exists vs. doesn't
-3. **Physics-Informed Training**: Uses radio propagation constraints
-4. **Uncertainty Quantification**: Higher uncertainty in unobserved regions
+1. **Trajectory-Aware Conditioning**: 5-channel input (building map, sparse RSS, trajectory mask, coverage density, TX position)
+2. **CoverageAwareUNet**: Novel attention mechanism modulated by coverage density (key ECCV contribution)
+3. **Physics-Informed Training**: Trajectory consistency, coverage-weighted loss, distance decay regularization
+4. **Uncertainty Quantification**: Multiple DDIM samples yield calibrated uncertainty maps
 
 ## Installation
 
 ### Option A: Virtual Environment (Recommended)
 
 ```bash
-# Clone the repository
 git clone https://github.com/YaqoobAnsari/TrajectoryDiff.git
 cd TrajectoryDiff
 
-# Create virtual environment
 python -m venv venv
 
 # Activate (Windows)
@@ -47,21 +46,13 @@ venv\Scripts\activate
 # Activate (Linux/Mac)
 source venv/bin/activate
 
-# Install dependencies
 pip install -r requirements.txt
-
-# For development (testing, linting)
-pip install -r requirements-dev.txt
+pip install -r requirements-dev.txt  # For testing/linting
 ```
 
 ### Option B: Conda Environment
 
 ```bash
-# Clone the repository
-git clone https://github.com/YaqoobAnsari/TrajectoryDiff.git
-cd TrajectoryDiff
-
-# Create conda environment
 conda env create -f environment.yaml
 conda activate trajdiff
 ```
@@ -69,55 +60,111 @@ conda activate trajdiff
 ### Verify Installation
 
 ```bash
-# Run tests to verify setup
-pytest tests/ -v
+pytest tests/ -v                    # Run all 199 tests
+python scripts/smoke_test_quick.py  # Quick pipeline check (~15s on CPU)
 ```
 
 ## Quick Start
 
 ### 1. Download Data
 
-Download the RadioMapSeer dataset from [IEEE DataPort](https://ieee-dataport.org/) and place it in `data/raw/RadioMapSeer/`.
+Download the RadioMapSeer dataset from [IEEE DataPort](https://ieee-dataport.org/) and place it in `data/raw/`.
 
-### 2. Train a Model
+### 2. Smoke Test
+
+```bash
+# Fast test: 2 maps, 2 training steps, ~15 seconds on CPU
+python scripts/smoke_test_quick.py
+
+# Full test: 2 maps, 3 epochs via Lightning Trainer
+python scripts/smoke_test.py
+```
+
+### 3. Train a Model
 
 ```bash
 # Default configuration
 python scripts/train.py
 
-# With experiment config
-python scripts/train.py experiment=trajectory_baseline
+# Full model with all features
+python scripts/train.py experiment=trajectory_full
 
 # Override parameters
 python scripts/train.py data.loader.batch_size=32 training.max_epochs=50
 ```
 
-### 3. Evaluate
+### 4. Evaluate
 
 ```bash
-python scripts/evaluate.py checkpoint=experiments/trajectory_baseline/checkpoints/best.ckpt
+python scripts/evaluate.py checkpoint=experiments/trajectory_full/checkpoints/best.ckpt
 ```
+
+## Architecture
+
+```
+  building_map ──┐
+  sparse_rss ────┤  ConditionEncoder                CoverageAwareUNet
+  traj_mask ─────┤  (CNN + TX Spatial) ──►  cond ──► (coverage-modulated  ──► noise_pred
+  coverage ──────┤       encoding              attention at each level)
+  tx_position ───┘
+```
+
+### Novel Components
+
+| Component | File | Description |
+|-----------|------|-------------|
+| CoverageAwareUNet | `src/models/diffusion/coverage_unet.py` | UNet with coverage-modulated attention blocks |
+| CoverageAwareAttention | `src/models/diffusion/attention.py` | Attention weights scaled by coverage density |
+| TrajectoryDiffLoss | `src/training/losses.py` | Combined physics-informed training loss |
 
 ## Project Structure
 
 ```
-trajectorydiff/
-├── configs/                    # Hydra configuration files
-│   ├── config.yaml            # Main config
-│   ├── data/                  # Dataset configs
-│   ├── model/                 # Model configs
-│   ├── training/              # Training configs
-│   └── experiment/            # Experiment-specific overrides
+TrajectoryDiff/
+├── configs/                    # Hydra configuration (16 experiment configs)
 ├── src/
-│   ├── data/                  # Data loading and trajectory sampling
-│   ├── models/                # Model definitions
-│   ├── training/              # Training logic
-│   ├── evaluation/            # Metrics and evaluation
-│   └── utils/                 # Utilities
-├── scripts/                   # Entry point scripts
-├── notebooks/                 # Jupyter notebooks
-├── tests/                     # Unit tests
-└── docs/                      # Documentation
+│   ├── data/                  # Dataset, DataModule, trajectory sampling
+│   ├── models/
+│   │   ├── diffusion/         # DDPM, UNet, CoverageAwareUNet, attention
+│   │   ├── encoders/          # TrajectoryConditionedUNet, ConditionEncoder
+│   │   └── baselines/         # IDW, RBF, Kriging, NN interpolation
+│   ├── training/              # DiffusionModule, losses, inference, callbacks
+│   └── evaluation/            # RMSE, SSIM, trajectory-aware metrics (dBm)
+├── scripts/                   # train.py, evaluate.py, smoke tests, SLURM scripts
+├── tests/                     # 199 tests across 9 test files
+└── docs/                      # Research plan, architecture docs, metrics guide
+```
+
+## Experiments
+
+16 experiment configurations ready for systematic evaluation:
+
+| Category | Experiments | Description |
+|----------|-------------|-------------|
+| **Main** | `trajectory_full`, `trajectory_baseline`, `uniform_baseline` | Full model vs baselines |
+| **Ablations** | `ablation_no_{coverage_attention, physics_loss, trajectory_mask, coverage_density, tx_position}`, `ablation_small_unet` | Component contribution |
+| **Cross-eval** | `cross_eval_traj_to_uniform`, `cross_eval_uniform_to_traj` | Generalization |
+| **Sweeps** | `coverage_sweep_{1,5,10,20}pct`, `num_trajectories_sweep` | Coverage effects |
+
+```bash
+# Run a specific experiment
+python scripts/train.py experiment=trajectory_full
+
+# Run on SLURM cluster (H200 GPUs)
+sbatch scripts/run_experiments.sh trajectory_full
+```
+
+## Configuration
+
+We use [Hydra](https://hydra.cc/) for configuration management:
+
+```bash
+python scripts/train.py \
+    data.sampling.strategy=trajectory \
+    data.sampling.trajectory.num_trajectories=5 \
+    model.coverage_attention.enabled=true \
+    model.physics.enabled=true \
+    training.optimizer.lr=1e-4
 ```
 
 ## Key Concepts
@@ -129,46 +176,18 @@ trajectorydiff/
 | **Trajectory Sampling** | Samples collected along walking paths (biased, correlated) |
 | **Uniform Sampling** | Samples at random locations (idealized, unrealistic) |
 | **Blind Spots** | Regions never visited (locked rooms, restricted areas) |
-
-## Configuration
-
-We use [Hydra](https://hydra.cc/) for configuration management. Key configuration groups:
-
-- **data**: Dataset, sampling strategy, augmentation
-- **model**: Architecture, diffusion parameters, trajectory encoder
-- **training**: Optimizer, scheduler, checkpointing
-
-Override any parameter from command line:
-
-```bash
-python scripts/train.py \
-    data.sampling.strategy=trajectory \
-    data.sampling.trajectory.num_trajectories=5 \
-    model.unet.base_channels=64 \
-    training.optimizer.lr=1e-4
-```
-
-## Experiments
-
-See `docs/PLAN.md` for the full research plan. Key experiments:
-
-| Experiment | Description |
-|------------|-------------|
-| Baseline Comparison | TrajectoryDiff vs interpolation, U-Net, standard diffusion |
-| Sampling Ablation | Uniform vs trajectory sampling comparison |
-| Encoder Ablation | GNN vs Transformer vs Hybrid trajectory encoder |
-| Coverage Study | Performance vs sampling density |
+| **Coverage Density** | Gaussian-smoothed trajectory mask indicating sample confidence |
 
 ## Citation
 
 If you use this code in your research, please cite:
 
 ```bibtex
-@article{trajectorydiff2025,
+@article{trajectorydiff2026,
   title={TrajectoryDiff: Trajectory-Conditioned Diffusion for Radio Map Generation},
-  author={Your Name},
+  author={Ansari, Yaqoob},
   journal={arXiv preprint},
-  year={2025}
+  year={2026}
 }
 ```
 
@@ -180,3 +199,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - RadioMapSeer dataset from IEEE DataPort
 - Built with [PyTorch Lightning](https://lightning.ai/) and [Hydra](https://hydra.cc/)
+- GPU resources: CMUQ deepnet2 (NVIDIA H200)

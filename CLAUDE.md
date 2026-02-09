@@ -8,6 +8,8 @@ Research project exploring trajectory-conditioned diffusion models for indoor ra
 
 **Target**: ECCV-level publication demonstrating trajectory-aware diffusion outperforms uniform-sampling assumptions.
 
+**Version**: v0.4.0-experiment-ready | **Tests**: 199 passing (9 test files)
+
 ## Key Concepts (Domain Knowledge)
 
 - **Radio Map**: 2D spatial function R(x,y) = signal strength (dBm) at each location
@@ -29,32 +31,57 @@ TrajectoryDiff/
 │   │   └── trajectory_diffusion.yaml  # Model architecture config
 │   ├── training/
 │   │   └── default.yaml       # Training hyperparameters
-│   └── experiment/
-│       ├── trajectory_baseline.yaml  # Trajectory sampling experiment
-│       └── uniform_baseline.yaml     # Uniform sampling baseline
-├── src/                       # Source code (TO BE IMPLEMENTED)
+│   └── experiment/            # 16 experiment configs
+│       ├── trajectory_full.yaml          # Full model, all features
+│       ├── trajectory_baseline.yaml      # Trajectory sampling baseline
+│       ├── uniform_baseline.yaml         # Uniform sampling baseline
+│       ├── ablation_no_*.yaml            # 5 ablation configs
+│       ├── cross_eval_*.yaml             # 2 cross-evaluation configs
+│       ├── coverage_sweep_{1,5,10,20}pct.yaml  # Coverage sweeps
+│       └── num_trajectories_sweep.yaml   # Hydra multirun sweep
+├── src/                       # Source code
 │   ├── data/                  # Data loading and processing
-│   │   ├── dataset.py         # PyTorch Dataset classes
-│   │   ├── datamodule.py      # Lightning DataModule
+│   │   ├── dataset.py         # RadioMapDataset, UniformSamplingDataset
+│   │   ├── datamodule.py      # Lightning RadioMapDataModule
+│   │   ├── floor_plan.py      # Floor plan processing, dBm conversion
 │   │   ├── transforms.py      # Data augmentations
 │   │   └── trajectory_sampler.py  # Trajectory generation logic
 │   ├── models/
 │   │   ├── diffusion/         # Diffusion model components
-│   │   ├── encoders/          # Floor plan & trajectory encoders
-│   │   └── baselines/         # Baseline models
+│   │   │   ├── ddpm.py        # GaussianDiffusion, DDIMSampler
+│   │   │   ├── unet.py        # UNet backbone (Small/Medium/Large)
+│   │   │   ├── coverage_unet.py  # CoverageAwareUNet (novel)
+│   │   │   └── attention.py   # CoverageAwareAttention (novel)
+│   │   ├── encoders/          # Condition encoders
+│   │   │   └── condition_encoder.py  # TrajectoryConditionedUNet
+│   │   └── baselines/         # IDW, RBF, Kriging, NN interpolation
 │   ├── training/              # Training logic
+│   │   ├── diffusion_module.py  # Lightning DiffusionModule (EMA, LR schedule)
+│   │   ├── losses.py          # TrajectoryDiffLoss (physics-informed)
+│   │   ├── inference.py       # DiffusionInference, uncertainty estimation
+│   │   └── callbacks.py       # W&B logging, metrics, gradient monitoring
 │   ├── evaluation/            # Evaluation metrics
-│   └── utils/                 # Utilities
+│   │   └── metrics.py         # RMSE, SSIM, trajectory-aware metrics
+│   └── utils/
+│       └── visualization.py   # Radio map visualization
 ├── scripts/                   # Entry point scripts
-│   └── train.py              # Training script (skeleton)
+│   ├── train.py              # Hydra training script
+│   ├── evaluate.py           # Evaluation with dBm-scale metrics
+│   ├── smoke_test.py         # Lightning-based smoke test (full epochs)
+│   ├── smoke_test_quick.py   # Fast manual smoke test (~15s on CPU)
+│   ├── run_experiments.sh    # SLURM/SSH: run all 16 experiments
+│   └── run_evaluation.sh    # SLURM/SSH: batch evaluation
+├── tests/                     # 199 tests (9 test files)
 ├── notebooks/                 # Jupyter notebooks for exploration
 ├── experiments/               # Experiment outputs (gitignored)
 ├── data/                      # Data directory (gitignored)
-│   ├── raw/                   # Original RadioMapSeer data
-│   └── processed/             # Preprocessed data
-├── tests/                     # Unit tests
-├── docs/
-│   └── PLAN.md               # Detailed research plan
+│   └── raw/                   # RadioMapSeer data (701 maps x 80 Tx)
+├── docs/                      # Documentation
+│   ├── PLAN.md               # Research plan and milestones
+│   ├── WHAT_WE_BUILT.md      # Technical architecture deep dive
+│   ├── NEXT_STEPS.md         # Experiment plans
+│   ├── metrics.md            # Evaluation metrics guide
+│   └── dataset_notes.md      # RadioMapSeer dataset docs
 ├── environment.yaml           # Conda environment
 ├── pyproject.toml            # Project metadata
 └── README.md                 # Project README
@@ -69,6 +96,7 @@ TrajectoryDiff/
 - **Data Processing**: NumPy, SciPy, scikit-image
 - **Visualization**: Matplotlib, Seaborn
 - **Testing**: pytest
+- **GPU Cluster**: SLURM (NVIDIA H200 via MIG profiles)
 
 ## Common Commands
 
@@ -77,28 +105,58 @@ TrajectoryDiff/
 conda env create -f environment.yaml
 conda activate trajdiff
 
-# Training
-python scripts/train.py                                    # Default config
-python scripts/train.py model=unet_small data.batch_size=16  # Override params
-python scripts/train.py experiment=trajectory_baseline     # Named experiment
-python scripts/train.py -m model=unet_small,unet_large     # Multirun sweep
+# Quick smoke test (CPU, ~15 seconds)
+python scripts/smoke_test_quick.py
+
+# Training (local)
+python scripts/train.py                                       # Default config
+python scripts/train.py experiment=trajectory_full            # Full model
+python scripts/train.py experiment=trajectory_baseline        # Trajectory baseline
+python scripts/train.py data.loader.batch_size=16 training.max_epochs=50  # Override
+
+# Training (SLURM cluster)
+sbatch scripts/run_experiments.sh                             # All experiments
+sbatch scripts/run_experiments.sh trajectory_full             # Single experiment
 
 # Evaluation
 python scripts/evaluate.py checkpoint=path/to/checkpoint.ckpt
-python scripts/evaluate.py checkpoint=path/to/checkpoint.ckpt data.sampling=trajectory
-
-# Visualization
-python scripts/visualize.py checkpoint=path/to/checkpoint.ckpt
 
 # Testing
 pytest tests/ -v
-pytest tests/test_data.py -v -k "test_trajectory"
+pytest tests/test_coverage_unet.py -v     # Specific test file
+pytest tests/ -v -k "test_training"       # Keyword filter
 
 # Linting
 ruff check src/
 black src/ --check
-mypy src/
 ```
+
+## Architecture Overview
+
+### Novel Contributions
+
+1. **CoverageAwareUNet** (`src/models/diffusion/coverage_unet.py`): UNet variant that replaces standard AttentionBlocks with CoverageAwareAttentionBlocks. Coverage density is threaded through encoder/middle/decoder, modulating attention weights so the model pays more attention to high-coverage (observed) regions.
+
+2. **Physics-Informed Losses** (`src/training/losses.py`): TrajectoryDiffLoss combines:
+   - TrajectoryConsistencyLoss: Enforces prediction accuracy along observed trajectories
+   - CoverageWeightedLoss: Weights diffusion loss by coverage density
+   - DistanceDecayLoss: Soft constraint that signal decreases with TX distance
+
+### Data Normalization Convention
+
+| Data Type | Range | Notes |
+|-----------|-------|-------|
+| Signal data (radio_map, sparse_rss, building_map) | [-1, 1] | Normalized from [0, 255] PNG |
+| Masks (trajectory_mask, coverage_density) | [0, 1] | Binary/continuous masks |
+| TX position | [0, 1] | Normalized by image size (256) |
+
+### DiffusionModule API
+
+- `training_step()` returns **bare loss tensor** (not dict)
+- `validation_step()` returns `{'val_loss': loss}` dict
+- Checkpoint monitors `val/loss` (not `val/rmse`)
+- Physics losses toggled via `use_physics_losses` flag
+- Coverage attention toggled via `use_coverage_attention` flag
 
 ## Code Style & Conventions
 
@@ -106,7 +164,7 @@ mypy src/
 - **Linting**: Ruff for fast linting
 - **Type Hints**: Required for all function signatures
 - **Docstrings**: Google style docstrings for public functions/classes
-- **Naming**: 
+- **Naming**:
   - `snake_case` for functions, variables, modules
   - `PascalCase` for classes
   - `UPPER_CASE` for constants
@@ -114,18 +172,21 @@ mypy src/
 
 ## Key Files to Understand First
 
-1. `configs/config.yaml` - Entry point for all configuration
+1. `configs/config.yaml` - Entry point for all Hydra configuration
 2. `src/data/trajectory_sampler.py` - Core trajectory generation logic
-3. `src/models/diffusion/trajectory_diffusion.py` - Main model
-4. `src/training/trainer.py` - Lightning training module
-5. `docs/PLAN.md` - Detailed research plan and milestones
+3. `src/models/encoders/condition_encoder.py` - TrajectoryConditionedUNet (main model)
+4. `src/models/diffusion/coverage_unet.py` - CoverageAwareUNet (novel contribution)
+5. `src/training/diffusion_module.py` - Lightning training module
+6. `src/training/losses.py` - Physics-informed losses (novel contribution)
+7. `docs/PLAN.md` - Detailed research plan and milestones
 
 ## Dataset: RadioMapSeer
 
-- **Location**: `data/raw/RadioMapSeer/`
-- **Format**: Dense pathloss maps (256x256 or 512x512), floor plans, Tx locations
-- **Preprocessing**: Run `python scripts/preprocess_data.py` after download
+- **Location**: `data/raw/` (701 maps, 56K radio maps)
+- **Format**: 256x256 PNG pathloss maps, binary building maps, Tx positions (JSON)
+- **Encoding**: PNG 0-255 maps to dBm via `(png / 255) * 139 + (-186)`
 - **Note**: We simulate trajectory sampling on top of dense ground truth
+- **Caveat**: File scan of 56K files is slow on Windows; use `map_ids` subset for local testing
 
 ## Trajectory Sampling Strategy
 
@@ -136,6 +197,12 @@ Three trajectory types implemented in `src/data/trajectory_sampler.py`:
 3. **Corridor-biased**: Prefers corridor regions (realistic human behavior)
 
 Each trajectory produces: `[(t, x, y, rss), ...]` with optional noise injection.
+
+## Hydra Config Notes
+
+- Model config keys live directly under `model:` group (no double nesting in YAML file)
+- Data path: `data.dataset.root` resolves to `data/raw/`
+- Experiment configs use `# @package _global_` for proper override scope
 
 ## Git Workflow
 
@@ -150,17 +217,14 @@ Each trajectory produces: `[(t, x, y, rss), ...]` with optional noise injection.
 - Always run tests before pushing: `pytest tests/ -v`
 - Log all experiments to wandb for reproducibility
 - Use Hydra's `--cfg job` to inspect resolved config before running
+- UNet output_conv is zero-initialized (standard for diffusion) -- use `_make_output_nonzero()` helper in tests
 
 ## Current Focus
 
-See `docs/PLAN.md` for detailed weekly plan. Current phase: **Phase 0: Environment Setup**
+**Phase**: Experiment-ready (v0.4.0) | All code complete, ready for GPU training via SSH/SLURM
 
 ### Immediate Next Steps:
-1. Download RadioMapSeer dataset
-2. Implement data loading (src/data/dataset.py, datamodule.py)
-3. Implement trajectory sampling (src/data/trajectory_sampler.py)
-4. Create visualization notebook for data exploration
-
-## Contact
-
-For questions about the research direction or implementation details, refer to `docs/radio_map_deep_dive.md` for theoretical background.
+1. SSH to GPU cluster (deepnet2 with H200 GPUs)
+2. Run full experiment suite via `scripts/run_experiments.sh`
+3. Evaluate checkpoints via `scripts/run_evaluation.sh`
+4. Analyze results and write paper
