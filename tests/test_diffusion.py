@@ -528,12 +528,13 @@ class TestConditionEncoder:
         from models.encoders import TxPositionEncoder
 
         encoder = TxPositionEncoder(channels=8, encoding_type='gaussian')
-        tx_position = torch.tensor([[32.0, 32.0], [48.0, 16.0]])
+        # TX position in [0, 1] normalized coordinates (center of map)
+        tx_position = torch.tensor([[0.5, 0.5], [0.75, 0.25]])
 
         output = encoder(tx_position, H=64, W=64)
 
         assert output.shape == (2, 8, 64, 64)
-        # Output should peak at TX position
+        # Output should peak near TX position (center) vs corner
         assert output[0, 0, 32, 32] > output[0, 0, 0, 0]
 
     def test_positional_encoding_2d(self):
