@@ -216,11 +216,12 @@ class DiffusionInference:
             condition = {k: v for k, v in condition.items() if v is not None}
 
             # Generate samples
+            # Note: ddim_steps and eta are configured at DDIMSampler init time,
+            # not per-call. They are accepted as method params for documentation
+            # but not passed through to self.sample().
             samples = self.sample(
                 condition=condition,
                 use_ddim=use_ddim,
-                ddim_steps=ddim_steps,
-                eta=eta,
                 progress=False,
             )
 

@@ -222,18 +222,19 @@ class MetricsLogger(Callback):
     Callback for computing and logging additional metrics.
 
     Computes RMSE, SSIM, and other radio map-specific metrics
-    during validation.
+    during validation. Full diffusion-based metrics are expensive,
+    so they run every N epochs with a small sample count.
     """
 
     def __init__(
         self,
-        compute_every_n_epochs: int = 1,
-        num_eval_samples: int = 100,
+        compute_every_n_epochs: int = 10,
+        num_eval_samples: int = 10,
     ):
         """
         Args:
-            compute_every_n_epochs: Compute full metrics every N epochs
-            num_eval_samples: Number of samples to use for metric computation
+            compute_every_n_epochs: Compute full sampling metrics every N epochs
+            num_eval_samples: Maximum samples for full diffusion evaluation
         """
         super().__init__()
         self.compute_every_n_epochs = compute_every_n_epochs
@@ -255,7 +256,13 @@ class MetricsLogger(Callback):
         if val_dataloader is None:
             return
 
-        # Compute metrics over multiple batches
+        try:
+            self._compute_sampling_metrics(trainer, pl_module, val_dataloader)
+        except Exception as e:
+            print(f"MetricsLogger: Failed to compute metrics at epoch {trainer.current_epoch}: {e}")
+
+    def _compute_sampling_metrics(self, trainer, pl_module, val_dataloader):
+        """Run full diffusion sampling and compute reconstruction metrics."""
         all_rmse = []
         all_mae = []
         total_samples = 0
@@ -265,21 +272,19 @@ class MetricsLogger(Callback):
                 if total_samples >= self.num_eval_samples:
                     break
 
-                # Move to device
                 device = pl_module.device
                 batch = {
                     k: v.to(device) if isinstance(v, torch.Tensor) else v
                     for k, v in batch.items()
                 }
 
-                # Extract condition and ground truth
                 condition = pl_module._extract_condition(batch)
                 ground_truth = batch['radio_map']
 
-                # Generate samples
+                # Generate samples via DDIM
                 samples = pl_module.sample(condition, use_ddim=True, progress=False)
 
-                # Compute metrics
+                # Compute per-sample metrics
                 rmse = torch.sqrt(((samples - ground_truth) ** 2).mean(dim=(1, 2, 3)))
                 mae = (samples - ground_truth).abs().mean(dim=(1, 2, 3))
 
@@ -288,12 +293,10 @@ class MetricsLogger(Callback):
 
                 total_samples += ground_truth.shape[0]
 
-        # Aggregate metrics
         if len(all_rmse) > 0:
             rmse = torch.cat(all_rmse).mean().item()
             mae = torch.cat(all_mae).mean().item()
 
-            # Log metrics
             pl_module.log('val/rmse', rmse, sync_dist=True)
             pl_module.log('val/mae', mae, sync_dist=True)
 

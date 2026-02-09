@@ -2,7 +2,7 @@
 PyTorch Lightning Module for Trajectory-Conditioned Diffusion.
 
 Handles training, validation, and inference for the diffusion model.
-Includes logging, checkpointing, and visualization callbacks.
+Includes optional physics-informed losses and coverage-aware attention.
 """
 
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -30,6 +30,8 @@ class DiffusionModule(L.LightningModule):
     - Validation with fixed timesteps for consistent metrics
     - Sample generation during validation
     - Metric computation (MSE, trajectory-aware metrics)
+    - Optional physics-informed losses (TrajectoryDiffLoss)
+    - Optional coverage-aware attention (CoverageAwareUNet)
     - Optimizer and scheduler configuration
     """
 
@@ -50,6 +52,14 @@ class DiffusionModule(L.LightningModule):
         use_trajectory_mask: bool = True,
         use_coverage_density: bool = True,
         use_tx_position: bool = True,
+        # Physics loss configuration
+        use_physics_losses: bool = False,
+        trajectory_consistency_weight: float = 0.1,
+        coverage_weighted: bool = True,
+        distance_decay_weight: float = 0.01,
+        # Coverage attention configuration
+        use_coverage_attention: bool = False,
+        coverage_temperature: float = 1.0,
         # Training configuration
         learning_rate: float = 1e-4,
         weight_decay: float = 0.01,
@@ -78,6 +88,12 @@ class DiffusionModule(L.LightningModule):
             use_trajectory_mask: Include trajectory mask
             use_coverage_density: Include coverage density
             use_tx_position: Include TX position encoding
+            use_physics_losses: Enable physics-informed losses
+            trajectory_consistency_weight: Weight for trajectory consistency loss
+            coverage_weighted: Use coverage-weighted diffusion loss
+            distance_decay_weight: Weight for distance decay regularization
+            use_coverage_attention: Use CoverageAwareUNet
+            coverage_temperature: Temperature for coverage attention modulation
             learning_rate: Initial learning rate
             weight_decay: AdamW weight decay
             warmup_steps: Linear warmup steps
@@ -91,7 +107,7 @@ class DiffusionModule(L.LightningModule):
         super().__init__()
         self.save_hyperparameters()
 
-        # Create model
+        # Create model (with optional coverage-aware attention)
         self.model = TrajectoryConditionedUNet(
             unet_size=unet_size,
             image_size=image_size,
@@ -101,6 +117,8 @@ class DiffusionModule(L.LightningModule):
             use_trajectory_mask=use_trajectory_mask,
             use_coverage_density=use_coverage_density,
             use_tx_position=use_tx_position,
+            use_coverage_attention=use_coverage_attention,
+            coverage_temperature=coverage_temperature,
         )
 
         # Create diffusion process
@@ -110,6 +128,17 @@ class DiffusionModule(L.LightningModule):
             prediction_type=prediction_type,
             loss_type=loss_type,
         )
+
+        # Physics-informed losses (optional)
+        self.use_physics_losses = use_physics_losses
+        if use_physics_losses:
+            from .losses import TrajectoryDiffLoss
+            self.physics_loss = TrajectoryDiffLoss(
+                diffusion_weight=1.0,
+                trajectory_consistency_weight=trajectory_consistency_weight,
+                coverage_weighted=coverage_weighted,
+                distance_decay_weight=distance_decay_weight,
+            )
 
         # EMA model (optional)
         self.use_ema = use_ema
@@ -186,6 +215,47 @@ class DiffusionModule(L.LightningModule):
 
         return condition
 
+    def _compute_target(
+        self,
+        x_0: torch.Tensor,
+        t: torch.Tensor,
+        noise: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute prediction target based on prediction type."""
+        if self.hparams.prediction_type == 'epsilon':
+            return noise
+        elif self.hparams.prediction_type == 'x0':
+            return x_0
+        else:  # 'v'
+            sqrt_alpha = self.diffusion._extract(
+                self.diffusion.sqrt_alphas_cumprod, t, x_0.shape
+            )
+            sqrt_one_minus_alpha = self.diffusion._extract(
+                self.diffusion.sqrt_one_minus_alphas_cumprod, t, x_0.shape
+            )
+            return sqrt_alpha * noise - sqrt_one_minus_alpha * x_0
+
+    def _predict_x0(
+        self,
+        x_t: torch.Tensor,
+        t: torch.Tensor,
+        pred: torch.Tensor,
+    ) -> torch.Tensor:
+        """Recover predicted x0 from model output, clamped to [-1, 1]."""
+        if self.hparams.prediction_type == 'epsilon':
+            pred_x0 = self.diffusion.predict_x0_from_epsilon(x_t, t, pred)
+        elif self.hparams.prediction_type == 'x0':
+            pred_x0 = pred
+        else:  # 'v'
+            sqrt_alpha = self.diffusion._extract(
+                self.diffusion.sqrt_alphas_cumprod, t, x_t.shape
+            )
+            sqrt_one_minus = self.diffusion._extract(
+                self.diffusion.sqrt_one_minus_alphas_cumprod, t, x_t.shape
+            )
+            pred_x0 = sqrt_alpha * x_t - sqrt_one_minus * pred
+        return pred_x0.clamp(-1, 1)
+
     def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         """
         Training step.
@@ -207,41 +277,46 @@ class DiffusionModule(L.LightningModule):
         # Extract conditioning
         condition = self._extract_condition(batch)
 
-        # Compute training loss
+        # Forward diffusion
         noise = torch.randn_like(x_0)
         x_t = self.diffusion.q_sample(x_0, t, noise=noise)
 
         # Model prediction
         pred = self.forward(x_t, t, condition)
 
-        # Compute loss based on prediction type
-        if self.hparams.prediction_type == 'epsilon':
-            target = noise
-        elif self.hparams.prediction_type == 'x0':
-            target = x_0
-        else:  # 'v'
-            sqrt_alpha = self.diffusion._extract(
-                self.diffusion.sqrt_alphas_cumprod, t, x_0.shape
-            )
-            sqrt_one_minus_alpha = self.diffusion._extract(
-                self.diffusion.sqrt_one_minus_alphas_cumprod, t, x_0.shape
-            )
-            target = sqrt_alpha * noise - sqrt_one_minus_alpha * x_0
+        # Compute target
+        target = self._compute_target(x_0, t, noise)
 
-        # Loss computation
-        if self.hparams.loss_type == 'mse':
-            loss = F.mse_loss(pred, target)
-        elif self.hparams.loss_type == 'l1':
-            loss = F.l1_loss(pred, target)
-        else:  # 'huber'
-            loss = F.smooth_l1_loss(pred, target)
+        if self.use_physics_losses:
+            # Recover pred_x0 for physics losses
+            pred_x0 = self._predict_x0(x_t, t, pred)
+
+            # Combined loss with physics components
+            losses = self.physics_loss(
+                noise_pred=pred,
+                noise_target=target,
+                pred_x0=pred_x0,
+                batch=batch,
+            )
+            loss = losses['total']
+
+            # Log individual loss components
+            for key, val in losses.items():
+                self.log(f'train/{key}', val, prog_bar=(key == 'total'))
+        else:
+            # Standard diffusion loss
+            if self.hparams.loss_type == 'mse':
+                loss = F.mse_loss(pred, target)
+            elif self.hparams.loss_type == 'l1':
+                loss = F.l1_loss(pred, target)
+            else:  # 'huber'
+                loss = F.smooth_l1_loss(pred, target)
+            self.log('train/loss', loss, prog_bar=True)
 
         # Update EMA
         if self.use_ema:
             self._update_ema()
 
-        # Logging
-        self.log('train/loss', loss, prog_bar=True)
         self.log('train/timestep_mean', t.float().mean())
 
         return loss
@@ -260,13 +335,13 @@ class DiffusionModule(L.LightningModule):
         x_0 = batch['radio_map']
         B = x_0.shape[0]
 
-        # Use fixed timesteps for consistent validation
+        # Sample timesteps for validation
         t = self.diffusion.sample_timesteps(B, x_0.device)
 
         # Extract conditioning
         condition = self._extract_condition(batch)
 
-        # Compute validation loss
+        # Forward diffusion
         noise = torch.randn_like(x_0)
         x_t = self.diffusion.q_sample(x_0, t, noise=noise)
 
@@ -283,20 +358,8 @@ class DiffusionModule(L.LightningModule):
                 tx_position=condition.get('tx_position'),
             )
 
-        # Compute loss
-        if self.hparams.prediction_type == 'epsilon':
-            target = noise
-        elif self.hparams.prediction_type == 'x0':
-            target = x_0
-        else:
-            sqrt_alpha = self.diffusion._extract(
-                self.diffusion.sqrt_alphas_cumprod, t, x_0.shape
-            )
-            sqrt_one_minus_alpha = self.diffusion._extract(
-                self.diffusion.sqrt_one_minus_alphas_cumprod, t, x_0.shape
-            )
-            target = sqrt_alpha * noise - sqrt_one_minus_alpha * x_0
-
+        # Compute target and loss
+        target = self._compute_target(x_0, t, noise)
         loss = F.mse_loss(pred, target)
 
         # Log metrics

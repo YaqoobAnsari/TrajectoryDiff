@@ -5,7 +5,7 @@
 # Dataset paths
 dataset:
   name: radiomapseer
-  root: ${paths.data_dir}/RadioMapSeer
+  root: ${paths.data_dir}/raw
   split_file: ${data.dataset.root}/splits.json
 
 # Image dimensions

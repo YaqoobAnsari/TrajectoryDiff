@@ -62,7 +62,7 @@ class RadioMapDataset(Dataset):
             position_noise_std: Position noise in pixels
             rss_noise_std: RSS measurement noise (in PNG units, ~2 for dB equivalent)
             coverage_sigma: Gaussian smoothing sigma for coverage density
-            normalize: If True, normalize radio maps to [0, 1]
+            normalize: If True, normalize signal data to [-1, 1] for diffusion
             cache_building_maps: Cache building maps in memory
             seed: Random seed for trajectory generation
         """
@@ -144,10 +144,18 @@ class RadioMapDataset(Dataset):
         coverage_density = self._compute_coverage_density(trajectory_mask)
 
         # Normalize if requested
+        # Signal data -> [-1, 1] for diffusion model compatibility
+        # Masks (trajectory_mask, coverage_density) stay in [0, 1]
         if self.normalize:
-            radio_map = radio_map.astype(np.float32) / 255.0
-            sparse_rss = sparse_rss / 255.0
-            building_map = building_map.astype(np.float32) / 255.0
+            radio_map = radio_map.astype(np.float32) / 255.0 * 2.0 - 1.0
+            sparse_rss = sparse_rss / 255.0 * 2.0 - 1.0
+            # Zero out sparse_rss where mask is 0 (unobserved = neutral, not -1)
+            sparse_rss = sparse_rss * trajectory_mask
+            building_map = building_map.astype(np.float32) / 255.0 * 2.0 - 1.0
+
+        # Normalize TX position to [0, 1]
+        map_size = radio_map.shape[-1] if radio_map.ndim > 1 else 256
+        tx_position_norm = tx_position.astype(np.float32) / float(map_size)
 
         # Convert to tensors
         return {
@@ -156,7 +164,7 @@ class RadioMapDataset(Dataset):
             'sparse_rss': torch.from_numpy(sparse_rss[None]).float(),
             'trajectory_mask': torch.from_numpy(trajectory_mask[None]).float(),
             'coverage_density': torch.from_numpy(coverage_density[None]).float(),
-            'tx_position': torch.from_numpy(tx_position).float(),
+            'tx_position': torch.from_numpy(tx_position_norm).float(),
             'map_id': map_id,
             'tx_id': tx_id,
         }
@@ -302,10 +310,18 @@ class UniformSamplingDataset(RadioMapDataset):
         coverage_density = self._compute_coverage_density(trajectory_mask)
 
         # Normalize
+        # Signal data -> [-1, 1] for diffusion model compatibility
+        # Masks (trajectory_mask, coverage_density) stay in [0, 1]
         if self.normalize:
-            radio_map = radio_map.astype(np.float32) / 255.0
-            sparse_rss = sparse_rss / 255.0
-            building_map = building_map.astype(np.float32) / 255.0
+            radio_map = radio_map.astype(np.float32) / 255.0 * 2.0 - 1.0
+            sparse_rss = sparse_rss / 255.0 * 2.0 - 1.0
+            # Zero out sparse_rss where mask is 0 (unobserved = neutral, not -1)
+            sparse_rss = sparse_rss * trajectory_mask
+            building_map = building_map.astype(np.float32) / 255.0 * 2.0 - 1.0
+
+        # Normalize TX position to [0, 1]
+        map_size = radio_map.shape[-1] if radio_map.ndim > 1 else 256
+        tx_position_norm = tx_position.astype(np.float32) / float(map_size)
 
         return {
             'building_map': torch.from_numpy(building_map[None]).float(),
@@ -313,7 +329,7 @@ class UniformSamplingDataset(RadioMapDataset):
             'sparse_rss': torch.from_numpy(sparse_rss[None]).float(),
             'trajectory_mask': torch.from_numpy(trajectory_mask[None]).float(),
             'coverage_density': torch.from_numpy(coverage_density[None]).float(),
-            'tx_position': torch.from_numpy(tx_position).float(),
+            'tx_position': torch.from_numpy(tx_position_norm).float(),
             'map_id': map_id,
             'tx_id': tx_id,
         }

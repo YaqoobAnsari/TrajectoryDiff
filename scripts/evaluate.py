@@ -190,26 +190,30 @@ def evaluate_model(
         else:
             samples = inference.sample(condition, use_ddim=use_ddim, progress=False)
 
-        # Compute metrics
-        all_rmse.append(compute_rmse(samples, ground_truth).cpu())
-        all_mae.append(compute_mae(samples, ground_truth).cpu())
-        all_psnr.append(compute_psnr(samples, ground_truth).cpu())
-        all_ssim.append(compute_ssim(samples, ground_truth).cpu())
+        # Denormalize to dBm for paper-ready metrics
+        samples_dbm = denormalize_radio_map(samples)
+        gt_dbm = denormalize_radio_map(ground_truth)
 
-        # Trajectory-aware metrics
+        # Compute metrics in dBm scale
+        all_rmse.append(compute_rmse(samples_dbm, gt_dbm).cpu())
+        all_mae.append(compute_mae(samples_dbm, gt_dbm).cpu())
+        all_psnr.append(compute_psnr(samples, ground_truth).cpu())  # PSNR in normalized space
+        all_ssim.append(compute_ssim(samples, ground_truth).cpu())  # SSIM in normalized space
+
+        # Trajectory-aware metrics (dBm scale)
         if 'trajectory_mask' in batch:
             traj_mask = batch['trajectory_mask']
-            all_traj_rmse.append(compute_trajectory_rmse(samples, ground_truth, traj_mask).cpu())
-            all_blind_rmse.append(compute_blind_spot_rmse(samples, ground_truth, traj_mask).cpu())
+            all_traj_rmse.append(compute_trajectory_rmse(samples_dbm, gt_dbm, traj_mask).cpu())
+            all_blind_rmse.append(compute_blind_spot_rmse(samples_dbm, gt_dbm, traj_mask).cpu())
 
         total_samples += ground_truth.shape[0]
 
     # Aggregate metrics
     metrics = {
-        'rmse': torch.cat(all_rmse).mean().item(),
-        'rmse_std': torch.cat(all_rmse).std().item(),
-        'mae': torch.cat(all_mae).mean().item(),
-        'mae_std': torch.cat(all_mae).std().item(),
+        'rmse_dbm': torch.cat(all_rmse).mean().item(),
+        'rmse_dbm_std': torch.cat(all_rmse).std().item(),
+        'mae_dbm': torch.cat(all_mae).mean().item(),
+        'mae_dbm_std': torch.cat(all_mae).std().item(),
         'psnr': torch.cat(all_psnr).mean().item(),
         'psnr_std': torch.cat(all_psnr).std().item(),
         'ssim': torch.cat(all_ssim).mean().item(),
@@ -218,8 +222,8 @@ def evaluate_model(
     }
 
     if all_traj_rmse:
-        metrics['trajectory_rmse'] = torch.cat(all_traj_rmse).mean().item()
-        metrics['blind_spot_rmse'] = torch.cat(all_blind_rmse).mean().item()
+        metrics['trajectory_rmse_dbm'] = torch.cat(all_traj_rmse).mean().item()
+        metrics['blind_spot_rmse_dbm'] = torch.cat(all_blind_rmse).mean().item()
 
     if all_uncertainty:
         metrics['mean_uncertainty'] = torch.cat(all_uncertainty).mean().item()
@@ -362,17 +366,17 @@ def main(cfg: DictConfig):
     # Setup data
     print("Setting up data...")
     datamodule = RadioMapDataModule(
-        data_root=cfg.data.dataset.root,
+        data_dir=cfg.data.dataset.root,
         batch_size=cfg.data.loader.batch_size,
         num_workers=cfg.data.loader.num_workers,
-        image_size=cfg.data.image.height,
-        train_split=cfg.data.splits.train,
-        val_split=cfg.data.splits.val,
-        augment=False,  # No augmentation for evaluation
+        train_ratio=cfg.data.splits.train,
+        val_ratio=cfg.data.splits.val,
         sampling_strategy=cfg.data.sampling.strategy,
         num_trajectories=cfg.data.sampling.trajectory.num_trajectories,
         points_per_trajectory=cfg.data.sampling.trajectory.points_per_trajectory,
+        trajectory_method=cfg.data.sampling.trajectory.method,
         rss_noise_std=cfg.data.sampling.trajectory.rss_noise_std,
+        position_noise_std=cfg.data.sampling.trajectory.get('position_noise_std', 0.5),
     )
     datamodule.setup('test')
     test_loader = datamodule.test_dataloader()
@@ -399,16 +403,16 @@ def main(cfg: DictConfig):
     print("RESULTS")
     print("=" * 60)
     print(f"Samples evaluated: {metrics['num_samples']}")
-    print(f"\nReconstruction Metrics:")
-    print(f"  RMSE:  {metrics['rmse']:.4f} +/- {metrics['rmse_std']:.4f}")
-    print(f"  MAE:   {metrics['mae']:.4f} +/- {metrics['mae_std']:.4f}")
+    print(f"\nReconstruction Metrics (dBm scale):")
+    print(f"  RMSE:  {metrics['rmse_dbm']:.2f} +/- {metrics['rmse_dbm_std']:.2f} dBm")
+    print(f"  MAE:   {metrics['mae_dbm']:.2f} +/- {metrics['mae_dbm_std']:.2f} dBm")
     print(f"  PSNR:  {metrics['psnr']:.2f} +/- {metrics['psnr_std']:.2f} dB")
     print(f"  SSIM:  {metrics['ssim']:.4f} +/- {metrics['ssim_std']:.4f}")
 
-    if 'trajectory_rmse' in metrics:
-        print(f"\nTrajectory-Aware Metrics:")
-        print(f"  Trajectory RMSE:  {metrics['trajectory_rmse']:.4f} (on observed points)")
-        print(f"  Blind Spot RMSE:  {metrics['blind_spot_rmse']:.4f} (on unobserved points)")
+    if 'trajectory_rmse_dbm' in metrics:
+        print(f"\nTrajectory-Aware Metrics (dBm scale):")
+        print(f"  Trajectory RMSE:  {metrics['trajectory_rmse_dbm']:.2f} dBm (on observed points)")
+        print(f"  Blind Spot RMSE:  {metrics['blind_spot_rmse_dbm']:.2f} dBm (on unobserved points)")
 
     if 'mean_uncertainty' in metrics:
         print(f"\nUncertainty Estimation:")

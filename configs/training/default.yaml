@@ -35,14 +35,14 @@ gradient:
 # Checkpointing
 checkpoint:
   save_top_k: 3
-  monitor: val/rmse
+  monitor: val/loss
   mode: min
   save_last: true
 
 # Early stopping
 early_stopping:
   enabled: true
-  monitor: val/rmse
+  monitor: val/loss
   patience: 20
   mode: min
   min_delta: 0.001

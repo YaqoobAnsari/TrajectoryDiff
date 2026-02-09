@@ -87,28 +87,27 @@ class TxPositionEncoder(nn.Module):
     Encodes transmitter position as a spatial feature map.
 
     Creates a distance-based encoding centered on the TX position.
+    Expects tx_position in [0, 1] normalized coordinates.
     """
 
     def __init__(
         self,
         channels: int,
         encoding_type: str = 'gaussian',
-        sigma: float = 10.0,
-        max_resolution: int = 256,
+        sigma: float = 0.04,
     ):
         """
         Args:
             channels: Number of output channels
             encoding_type: 'gaussian', 'distance', or 'sinusoidal'
-            sigma: Spread for gaussian encoding
-            max_resolution: Maximum spatial resolution
+            sigma: Spread for gaussian encoding (in [0,1] normalized space;
+                   0.04 ≈ 10 pixels at 256x256 resolution)
         """
         super().__init__()
 
         self.channels = channels
         self.encoding_type = encoding_type
         self.sigma = sigma
-        self.max_resolution = max_resolution
 
         if encoding_type == 'sinusoidal':
             self.mlp = nn.Sequential(
@@ -117,7 +116,7 @@ class TxPositionEncoder(nn.Module):
                 nn.Linear(channels, channels),
             )
         elif encoding_type == 'gaussian':
-            # Multiple Gaussian scales
+            # Multiple Gaussian scales (from very local to map-wide)
             self.sigmas = nn.Parameter(
                 torch.tensor([sigma * (2 ** i) for i in range(channels)]),
                 requires_grad=False
@@ -133,7 +132,7 @@ class TxPositionEncoder(nn.Module):
         Encode transmitter position.
 
         Args:
-            tx_position: TX coordinates (B, 2) in [0, max_resolution] range
+            tx_position: TX coordinates (B, 2) in [0, 1] normalized range
             H: Output height
             W: Output width
 
@@ -143,12 +142,12 @@ class TxPositionEncoder(nn.Module):
         B = tx_position.shape[0]
         device = tx_position.device
 
-        # Create coordinate grids
-        y_coords = torch.arange(H, device=device).float()
-        x_coords = torch.arange(W, device=device).float()
+        # Create coordinate grids in [0, 1] to match normalized tx_position
+        y_coords = torch.linspace(0, 1, H, device=device)
+        x_coords = torch.linspace(0, 1, W, device=device)
         yy, xx = torch.meshgrid(y_coords, x_coords, indexing='ij')
 
-        # Compute distance from TX
+        # Compute distance from TX (all in [0, 1] space)
         tx_x = tx_position[:, 0][:, None, None]  # (B, 1, 1)
         tx_y = tx_position[:, 1][:, None, None]  # (B, 1, 1)
 
@@ -165,9 +164,8 @@ class TxPositionEncoder(nn.Module):
             encoding = encoding.unsqueeze(1).expand(-1, self.channels, -1, -1)
 
         elif self.encoding_type == 'sinusoidal':
-            # Sinusoidal encoding of normalized position
-            tx_norm = tx_position / self.max_resolution  # (B, 2)
-            pos_embed = self.mlp(tx_norm)  # (B, channels)
+            # Sinusoidal encoding (tx_position already in [0, 1])
+            pos_embed = self.mlp(tx_position)  # (B, channels)
             encoding = pos_embed[:, :, None, None].expand(-1, -1, H, W)
 
         return encoding
@@ -389,6 +387,7 @@ class TrajectoryConditionedUNet(nn.Module):
     Complete trajectory-conditioned diffusion model.
 
     Combines the condition encoder with the U-Net denoiser.
+    Optionally uses CoverageAwareUNet for coverage-modulated attention.
     """
 
     def __init__(
@@ -404,6 +403,9 @@ class TrajectoryConditionedUNet(nn.Module):
         use_coverage_density: bool = True,
         use_tx_position: bool = True,
         tx_encoding_type: str = 'gaussian',
+        # Coverage-aware attention
+        use_coverage_attention: bool = False,
+        coverage_temperature: float = 1.0,
     ):
         """
         Initialize trajectory-conditioned model.
@@ -418,11 +420,12 @@ class TrajectoryConditionedUNet(nn.Module):
             use_coverage_density: Include coverage density
             use_tx_position: Include TX position encoding
             tx_encoding_type: Type of TX position encoding
+            use_coverage_attention: Use CoverageAwareUNet instead of standard UNet
+            coverage_temperature: Temperature for coverage attention modulation
         """
         super().__init__()
 
-        # Import here to avoid circular imports
-        from ..diffusion import get_unet
+        self.use_coverage_attention = use_coverage_attention
 
         # Condition encoder
         self.condition_encoder = ConditionEncoder(
@@ -436,13 +439,25 @@ class TrajectoryConditionedUNet(nn.Module):
         )
 
         # U-Net (radio map has 1 channel, conditioning adds condition_channels)
-        self.unet = get_unet(
-            size=unet_size,
-            in_channels=1,
-            out_channels=1,
-            cond_channels=condition_channels,
-            image_size=image_size,
-        )
+        if use_coverage_attention:
+            from ..diffusion.coverage_unet import get_coverage_aware_unet
+            self.unet = get_coverage_aware_unet(
+                size=unet_size,
+                in_channels=1,
+                out_channels=1,
+                cond_channels=condition_channels,
+                image_size=image_size,
+                coverage_temperature=coverage_temperature,
+            )
+        else:
+            from ..diffusion import get_unet
+            self.unet = get_unet(
+                size=unet_size,
+                in_channels=1,
+                out_channels=1,
+                cond_channels=condition_channels,
+                image_size=image_size,
+            )
 
     def forward(
         self,
@@ -478,8 +493,9 @@ class TrajectoryConditionedUNet(nn.Module):
             tx_position=tx_position,
         )
 
-        # U-Net forward
-        return self.unet(x, t, cond=cond)
+        # U-Net forward (coverage passed through for CoverageAwareUNet;
+        # standard UNet ignores it via **kwargs)
+        return self.unet(x, t, cond=cond, coverage=coverage_density)
 
 
 def get_condition_encoder(

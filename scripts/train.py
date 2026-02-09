@@ -95,11 +95,11 @@ def setup_callbacks(cfg: DictConfig) -> list:
             )
         )
 
-    # Metrics computation
+    # Metrics computation (full sampling is expensive — run sparingly)
     callbacks.append(
         MetricsLogger(
-            compute_every_n_epochs=1,
-            num_eval_samples=50,
+            compute_every_n_epochs=10,
+            num_eval_samples=10,
         )
     )
 
@@ -140,28 +140,55 @@ def setup_loggers(cfg: DictConfig) -> list:
 
 def create_model(cfg: DictConfig) -> DiffusionModule:
     """Create diffusion model from config."""
-    # Map config to DiffusionModule parameters
     model_cfg = cfg.model
 
-    # Determine U-Net size from base_channels
-    base_ch = model_cfg.unet.base_channels
-    if base_ch <= 32:
-        unet_size = 'small'
-    elif base_ch <= 64:
-        unet_size = 'medium'
-    else:
-        unet_size = 'large'
+    # U-Net size from config (small/medium/large)
+    unet_size = model_cfg.unet.get('size', 'medium')
+
+    # Conditioning flags from config
+    cond_cfg = model_cfg.get('conditioning', {})
+    use_building_map = cond_cfg.get('use_building_map', True)
+    use_sparse_rss = cond_cfg.get('use_sparse_rss', True)
+    use_trajectory_mask = cond_cfg.get('use_trajectory_mask', True)
+    use_coverage_density = cond_cfg.get('use_coverage_density', True)
+    use_tx_position = cond_cfg.get('use_tx_position', True)
+
+    # Physics loss config
+    physics_cfg = model_cfg.get('physics', {})
+    use_physics_losses = physics_cfg.get('enabled', False)
+    traj_consistency_weight = physics_cfg.get('trajectory_consistency', {}).get('weight', 0.1)
+    coverage_weighted = physics_cfg.get('coverage_weighted', True)
+    distance_decay_weight = physics_cfg.get('distance_decay', {}).get('weight', 0.01)
+
+    # Coverage attention config
+    coverage_attn_cfg = model_cfg.get('coverage_attention', {})
+    use_coverage_attention = coverage_attn_cfg.get('enabled', False)
+    coverage_temperature = coverage_attn_cfg.get('temperature', 1.0)
 
     return DiffusionModule(
         # Model config
         unet_size=unet_size,
         image_size=cfg.data.image.height,
-        condition_channels=model_cfg.unet.base_channels,
+        condition_channels=model_cfg.get('condition_channels', 64),
         # Diffusion config
         num_timesteps=model_cfg.diffusion.num_timesteps,
         beta_schedule=model_cfg.diffusion.beta_schedule,
         prediction_type=model_cfg.diffusion.prediction_type,
         loss_type=model_cfg.diffusion.loss_type,
+        # Conditioning flags
+        use_building_map=use_building_map,
+        use_sparse_rss=use_sparse_rss,
+        use_trajectory_mask=use_trajectory_mask,
+        use_coverage_density=use_coverage_density,
+        use_tx_position=use_tx_position,
+        # Physics losses
+        use_physics_losses=use_physics_losses,
+        trajectory_consistency_weight=traj_consistency_weight,
+        coverage_weighted=coverage_weighted,
+        distance_decay_weight=distance_decay_weight,
+        # Coverage attention
+        use_coverage_attention=use_coverage_attention,
+        coverage_temperature=coverage_temperature,
         # Training config
         learning_rate=cfg.training.optimizer.lr,
         weight_decay=cfg.training.optimizer.weight_decay,
@@ -177,17 +204,17 @@ def create_model(cfg: DictConfig) -> DiffusionModule:
 def create_datamodule(cfg: DictConfig) -> RadioMapDataModule:
     """Create data module from config."""
     return RadioMapDataModule(
-        data_root=cfg.data.dataset.root,
+        data_dir=cfg.data.dataset.root,
         batch_size=cfg.data.loader.batch_size,
         num_workers=cfg.data.loader.num_workers,
-        image_size=cfg.data.image.height,
-        train_split=cfg.data.splits.train,
-        val_split=cfg.data.splits.val,
-        augment=cfg.data.augmentation.enabled,
+        train_ratio=cfg.data.splits.train,
+        val_ratio=cfg.data.splits.val,
         sampling_strategy=cfg.data.sampling.strategy,
         num_trajectories=cfg.data.sampling.trajectory.num_trajectories,
         points_per_trajectory=cfg.data.sampling.trajectory.points_per_trajectory,
+        trajectory_method=cfg.data.sampling.trajectory.method,
         rss_noise_std=cfg.data.sampling.trajectory.rss_noise_std,
+        position_noise_std=cfg.data.sampling.trajectory.get('position_noise_std', 0.5),
     )
 
 
