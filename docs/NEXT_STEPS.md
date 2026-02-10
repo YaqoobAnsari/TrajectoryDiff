@@ -1,11 +1,19 @@
 # TrajectoryDiff: Comprehensive Next Steps Guide
 
-## Current Status (Feb 2026)
+## Current Status (Feb 10, 2026)
 
 **Version:** v0.4.0-experiment-ready
 **Phases Complete:** 0, 1, 2, 3 (Setup, Data, Model, Physics/Architecture + Bug Fixes + Integration)
 **Tests Passing:** 199 (9 test files)
-**Ready For:** GPU training on SLURM cluster (deepnet2 H200)
+**Phase 4 Status:** Wave 1 training on SLURM cluster (deepnet2 H200)
+
+### Active SLURM Jobs (Wave 1)
+| Job ID | Experiment | MIG Profile | Batch | Status | Est. Duration |
+|--------|-----------|-------------|-------|--------|---------------|
+| 2674 | trajectory_full | 7g.141gb (141GB) | 64 | RUNNING (Epoch 1+) | ~8-10h |
+| 2679 | trajectory_baseline | 2g.35gb (32.5GB) | 8 x accum=2 | RUNNING (Epoch 0) | ~36h |
+| 2680 | uniform_baseline | 2g.35gb (32.5GB) | 8 x accum=2 | RUNNING (Epoch 0) | ~36h |
+| 2681 | ablation_no_physics_loss | 2g.35gb (32.5GB) | 8 x accum=2 | PENDING (QOS limit) | ~36h |
 
 ### What We Have
 - Complete diffusion model with trajectory conditioning
@@ -25,7 +33,12 @@
 - ~~Architectural novelty (CoverageAwareUNet)~~ ✅ DONE
 - ~~Bug fixes and integration~~ ✅ DONE (8 critical bugs fixed)
 - ~~Experiment configs~~ ✅ DONE (16 configs)
-- Run experiments on GPU cluster
+- ~~GPU validation~~ ✅ DONE (smoke test + 1-epoch training passed)
+- ~~SLURM OOM fixes~~ ✅ DONE (batch sizing, CUDA alloc config, TF32 matmul)
+- ~~Wave 1 submission~~ ✅ DONE (4 jobs running/pending)
+- Wave 1 training completes (est. ~36h)
+- Submit Waves 2-4 (remaining 12 experiments)
+- Run classical baselines (scripts/run_baselines.py)
 - Analyze results and write paper
 
 ---

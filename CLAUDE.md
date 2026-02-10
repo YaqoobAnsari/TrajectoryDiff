@@ -120,9 +120,15 @@ python scripts/train.py experiment=trajectory_full            # Full model
 python scripts/train.py experiment=trajectory_baseline        # Trajectory baseline
 python scripts/train.py data.loader.batch_size=16 training.max_epochs=50  # Override
 
-# Training (SLURM cluster)
-sbatch scripts/run_experiments.sh                             # All experiments
-sbatch scripts/run_experiments.sh trajectory_full             # Single experiment
+# Training (SLURM cluster - via submit scripts)
+bash scripts/submit_experiment.sh trajectory_full 7g.141gb    # Single experiment (full GPU)
+bash scripts/submit_experiment.sh trajectory_baseline 2g.35gb # Single experiment (1/4 GPU)
+bash scripts/submit_all.sh 2g.35gb                            # All 16 experiments
+
+# Monitor SLURM jobs
+squeue -u $USER                                               # Job queue
+sacct -j <JOBID> --format=JobID,State,Elapsed                 # Job history
+tail -f experiments/logs/trajdiff_<JOBID>.out                 # Live training output
 
 # Evaluation
 python scripts/evaluate.py checkpoint=path/to/checkpoint.ckpt
@@ -225,13 +231,38 @@ Each trajectory produces: `[(t, x, y, rss), ...]` with optional noise injection.
 - Use Hydra's `--cfg job` to inspect resolved config before running
 - UNet output_conv is zero-initialized (standard for diffusion) -- use `_make_output_nonzero()` helper in tests
 
+## SLURM Cluster Details
+
+- **Cluster**: gpujobs.qatar.cmu.edu → deepnet2 (8x NVIDIA H200, MIG-partitioned)
+- **Partition**: gpu2, nodelist=deepnet2, mcs-label=unicellular
+- **MIG gres format**: `gpu:nvidia_h200_<profile>:1`
+- **Max concurrent jobs**: 4 (QOSMaxGRESPerUser)
+- **Conda env**: `/data1/yansari/.conda/envs/trajdiff` (PATH prepend, not `conda activate`)
+- **OOM-validated batch sizes**:
+  - 7g.141gb (141GB): batch=64 works; batch=32 x accum=2 is safer
+  - 2g.35gb (32.5GB): batch=16 OOMs; batch=8 x accum=2 works
+- **Key env vars**: `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`, `WANDB_MODE=offline`
+
 ## Current Focus
 
-**Phase**: Experiment execution (v0.4.0) | SLURM scripts fixed, analysis scripts ready, submitting to GPU cluster
+**Phase**: GPU Training (v0.4.0) | Wave 1 of 4 running on SLURM cluster
 
-### Immediate Next Steps:
-1. Run GPU validation: `sbatch scripts/gpu_validation.sh`
-2. Submit experiments: `bash scripts/submit_all.sh`
-3. Run baselines: `python scripts/run_baselines.py`
-4. Analyze uncertainty: `python scripts/analyze_uncertainty.py --checkpoint <best.ckpt>`
-5. Generate figures: `python scripts/generate_figures.py --checkpoint <best.ckpt>`
+### Wave 1 (Running - Feb 10, 2026):
+| Job | Experiment | MIG | Batch | Epochs |
+|-----|-----------|-----|-------|--------|
+| 2674 | trajectory_full | 7g.141gb | 64 | 200 |
+| 2679 | trajectory_baseline | 2g.35gb | 8 x accum=2 | 200 |
+| 2680 | uniform_baseline | 2g.35gb | 8 x accum=2 | 200 |
+| 2681 | ablation_no_physics_loss | 2g.35gb | 8 x accum=2 | 200 |
+
+### Remaining Waves:
+- **Wave 2**: ablation_no_coverage_attention, ablation_no_trajectory_mask, ablation_no_coverage_density, ablation_no_tx_position
+- **Wave 3**: coverage_sweep_{1,5,10,20}pct
+- **Wave 4**: cross_eval_traj_to_uniform, cross_eval_uniform_to_traj, ablation_small_unet, num_trajectories_sweep
+
+### After Training Completes:
+1. Run classical baselines: `python scripts/run_baselines.py`
+2. Evaluate best checkpoints: `python scripts/evaluate.py checkpoint=<path>`
+3. Analyze uncertainty: `python scripts/analyze_uncertainty.py --checkpoint <best.ckpt>`
+4. Generate figures: `python scripts/generate_figures.py --checkpoint <best.ckpt>`
+5. Write paper

@@ -22,7 +22,7 @@
 | Phase 1: Data Pipeline | ✅ Complete | 13 tests | src/data/ |
 | Phase 2: Model Development | ✅ Complete | 88 tests | src/models/, src/training/ |
 | Phase 3: Physics + Architecture | ✅ Complete | 98 new tests | losses.py, coverage_unet.py, attention.py |
-| Phase 4: Experiments | 🔄 In Progress | - | 16 experiment configs, SLURM scripts, analysis scripts |
+| Phase 4: Experiments | 🔄 TRAINING (Wave 1 running) | - | 16 experiment configs, SLURM scripts, analysis scripts |
 | Phase 5: Paper Writing | ⬜ Not Started | - | - |
 
 **Total Tests: 199 passing (9 test files) | Version: v0.4.0-experiment-ready**
@@ -634,8 +634,12 @@ class TrajectoryConditionedUNet(nn.Module):
 - [x] Classical baseline evaluation script created
 - [x] Uncertainty analysis script created
 - [x] Paper figure generation script created
-- [ ] Run GPU validation on cluster
-- [ ] Run experiments on GPU cluster
+- [x] Run GPU validation on cluster (smoke test + 1-epoch training on 2g.35gb)
+- [x] OOM fixes: batch=8+accum=2 for 2g.35gb, PYTORCH_CUDA_ALLOC_CONF, TF32 matmul
+- [x] Wave 1 submitted: trajectory_full, trajectory_baseline, uniform_baseline, ablation_no_physics_loss
+- [ ] Wave 1 training completes (~24-36h)
+- [ ] Submit Waves 2-4 (remaining ablations, sweeps, cross-eval)
+- [ ] Run classical baselines (scripts/run_baselines.py)
 - [ ] Analyze results
 
 ### 4.1 Physics-Informed Loss
@@ -845,4 +849,5 @@ def estimate_uncertainty(model, floor_plan, trajectory_data, n_samples=10):
 | 3-4 | Model Development | DDPM, U-Net, Training Module | ✅ Complete |
 | 5 | Physics + Architecture | CoverageAwareUNet, physics losses, 199 tests | ✅ Complete |
 | 6-7 | Experiments | 16 configs ready, SLURM scripts | ✅ Configs Ready |
-| 8-9 | Paper | Submission-ready draft | ⬜ Next |
+| 8 | GPU Training | Wave 1: 4 experiments running on H200 | 🔄 In Progress |
+| 9-10 | Paper | Submission-ready draft | ⬜ Next |
