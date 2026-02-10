@@ -79,6 +79,7 @@ python scripts/train.py \
     hardware.precision=bf16-mixed \
     hardware.slurm=true \
     logging.wandb.enabled=false \
+    logging.tensorboard.enabled=false \
     experiment.name=gpu_validation
 
 echo "1-epoch training: PASSED"
