@@ -50,7 +50,9 @@ assert torch.cuda.is_available(), 'CUDA not available!'
 print(f'PyTorch: {torch.__version__}')
 print(f'CUDA: {torch.version.cuda}')
 print(f'GPU: {torch.cuda.get_device_name(0)}')
-print(f'VRAM: {torch.cuda.get_device_properties(0).total_mem / 1024**3:.1f} GB')
+props = torch.cuda.get_device_properties(0)
+vram = getattr(props, 'total_memory', getattr(props, 'total_mem', 0))
+print(f'VRAM: {vram / 1024**3:.1f} GB')
 print(f'bf16 support: {torch.cuda.is_bf16_supported()}')
 print('GPU check: PASSED')
 "
