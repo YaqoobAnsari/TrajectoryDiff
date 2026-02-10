@@ -11,9 +11,9 @@
 #   bash scripts/submit_experiment.sh ablation_no_physics_loss 2g.35gb --time=48:00:00
 #
 # MIG Profiles (NVIDIA H200 on deepnet2):
-#   7g.141gb  - Full H200 GPU, batch_size=64, 12 workers
-#   2g.35gb   - 1/4 GPU, batch_size=32, 8 workers (default)
-#   1g.18gb   - 1/8 GPU, batch_size=16, 4 workers
+#   7g.141gb  - Full H200 GPU, batch=32 x accum=2, 12 workers
+#   2g.35gb   - 1/4 GPU, batch=8 x accum=2, 8 workers (default)
+#   1g.18gb   - 1/8 GPU, batch=4 x accum=4, 4 workers
 
 set -euo pipefail
 
@@ -48,7 +48,8 @@ case "$MIG_PROFILE" in
     7g.141gb)
         GRES="gpu:nvidia_h200_7g.141gb:1"
         TIME="24:00:00"
-        BATCH_SIZE=64
+        BATCH_SIZE=32
+        GRAD_ACCUM=2
         NUM_WORKERS=12
         MEM="64G"
         CPUS=16
@@ -56,7 +57,8 @@ case "$MIG_PROFILE" in
     2g.35gb)
         GRES="gpu:nvidia_h200_2g.35gb:1"
         TIME="36:00:00"
-        BATCH_SIZE=16
+        BATCH_SIZE=8
+        GRAD_ACCUM=2
         NUM_WORKERS=8
         MEM="32G"
         CPUS=8
@@ -64,7 +66,8 @@ case "$MIG_PROFILE" in
     1g.18gb)
         GRES="gpu:nvidia_h200_1g.18gb:1"
         TIME="48:00:00"
-        BATCH_SIZE=16
+        BATCH_SIZE=4
+        GRAD_ACCUM=4
         NUM_WORKERS=4
         MEM="16G"
         CPUS=4
@@ -73,7 +76,8 @@ case "$MIG_PROFILE" in
         echo "WARNING: Unknown MIG profile '$MIG_PROFILE', using defaults for 2g.35gb"
         GRES="gpu:nvidia_h200_2g.35gb:1"
         TIME="36:00:00"
-        BATCH_SIZE=32
+        BATCH_SIZE=8
+        GRAD_ACCUM=2
         NUM_WORKERS=8
         MEM="32G"
         CPUS=8
@@ -103,7 +107,7 @@ JOB_ID=$(sbatch \
     --parsable \
     --gres="${GRES}" \
     --time="${TIME}" \
-    --export=EXP_NAME="${EXP_NAME}",MIG_PROFILE="${MIG_PROFILE}",BATCH_SIZE="${BATCH_SIZE}",NUM_WORKERS="${NUM_WORKERS}" \
+    --export=EXP_NAME="${EXP_NAME}",MIG_PROFILE="${MIG_PROFILE}",BATCH_SIZE="${BATCH_SIZE}",GRAD_ACCUM="${GRAD_ACCUM}",NUM_WORKERS="${NUM_WORKERS}" \
     --mem="${MEM}" \
     --cpus-per-task="${CPUS}" \
     ${EXTRA_SBATCH_ARGS} \

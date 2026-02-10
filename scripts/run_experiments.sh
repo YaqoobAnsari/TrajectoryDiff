@@ -42,6 +42,9 @@ echo ""
 # wandb offline mode (sync later with: wandb login && wandb sync experiments/*/wandb/)
 export WANDB_MODE=offline
 
+# CUDA memory management: prevent fragmentation-induced OOM on MIG profiles
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
 # Activate conda environment
 # Directly prepend the trajdiff env to PATH (system conda is not accessible on compute nodes)
 export PATH="/data1/yansari/.conda/envs/trajdiff/bin:$PATH"
@@ -55,23 +58,28 @@ cd /data1/yansari/TrajectoryDiff
 EXP_NAME="${EXP_NAME:?ERROR: EXP_NAME not set. Use --export=EXP_NAME=trajectory_full}"
 MIG_PROFILE="${MIG_PROFILE:-7g.141gb}"
 
-# Set batch size based on MIG profile
+# Set batch size and gradient accumulation based on MIG profile
+# Effective batch = BATCH_SIZE * GRAD_ACCUM
 case "$MIG_PROFILE" in
     7g.141gb)
-        BATCH_SIZE="${BATCH_SIZE:-64}"
+        BATCH_SIZE="${BATCH_SIZE:-32}"
+        GRAD_ACCUM="${GRAD_ACCUM:-2}"
         NUM_WORKERS="${NUM_WORKERS:-12}"
         ;;
     2g.35gb)
-        BATCH_SIZE="${BATCH_SIZE:-16}"
+        BATCH_SIZE="${BATCH_SIZE:-8}"
+        GRAD_ACCUM="${GRAD_ACCUM:-2}"
         NUM_WORKERS="${NUM_WORKERS:-8}"
         ;;
     1g.18gb)
-        BATCH_SIZE="${BATCH_SIZE:-16}"
+        BATCH_SIZE="${BATCH_SIZE:-4}"
+        GRAD_ACCUM="${GRAD_ACCUM:-4}"
         NUM_WORKERS="${NUM_WORKERS:-4}"
         ;;
     *)
         echo "WARNING: Unknown MIG profile '$MIG_PROFILE', using defaults"
-        BATCH_SIZE="${BATCH_SIZE:-32}"
+        BATCH_SIZE="${BATCH_SIZE:-16}"
+        GRAD_ACCUM="${GRAD_ACCUM:-2}"
         NUM_WORKERS="${NUM_WORKERS:-8}"
         ;;
 esac
@@ -82,7 +90,7 @@ WANDB_PROJECT="${WANDB_PROJECT:-trajectorydiff}"
 
 echo "Experiment: $EXP_NAME"
 echo "MIG Profile: $MIG_PROFILE"
-echo "Batch Size: $BATCH_SIZE"
+echo "Batch Size: $BATCH_SIZE (effective: $((BATCH_SIZE * GRAD_ACCUM)) with accum=$GRAD_ACCUM)"
 echo "Workers: $NUM_WORKERS"
 echo "Precision: $PRECISION"
 echo "Epochs: $EPOCHS"
@@ -132,6 +140,7 @@ echo "----------------------------------------------"
 python scripts/train.py \
     experiment="$EXP_NAME" \
     training.max_epochs=$EPOCHS \
+    training.gradient.accumulation_steps=$GRAD_ACCUM \
     data.loader.batch_size=$BATCH_SIZE \
     data.loader.num_workers=$NUM_WORKERS \
     hardware.precision=$PRECISION \

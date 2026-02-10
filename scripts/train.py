@@ -242,6 +242,9 @@ def create_datamodule(cfg: DictConfig) -> RadioMapDataModule:
 def main(cfg: DictConfig) -> float:
     """Main training function."""
 
+    # Use TF32 for float32 matmuls (significant speedup on H200 Tensor Cores)
+    torch.set_float32_matmul_precision('medium')
+
     # Print config
     print("=" * 60)
     print("TrajectoryDiff Training")
