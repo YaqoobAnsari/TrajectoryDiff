@@ -47,9 +47,7 @@ export WANDB_MODE=offline
 export PATH="/data1/yansari/.conda/envs/trajdiff/bin:$PATH"
 
 # Navigate to project root
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-cd "$PROJECT_DIR"
+cd /data1/yansari/TrajectoryDiff
 
 # ============================================================
 # Configuration
