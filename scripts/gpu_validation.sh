@@ -31,7 +31,8 @@ echo "Date: $(date)"
 echo ""
 
 # Activate conda environment
-source ~/.bashrc
+# Source conda directly (bashrc guards against non-interactive shells)
+source /opt/anaconda3/etc/profile.d/conda.sh
 conda activate trajdiff || { echo "ERROR: Failed to activate conda env 'trajdiff'"; exit 1; }
 
 # Navigate to project root
