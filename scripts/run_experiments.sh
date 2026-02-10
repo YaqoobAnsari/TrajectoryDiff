@@ -92,7 +92,7 @@ echo ""
 # Auto-resume from checkpoint
 # ============================================================
 RESUME_ARG=""
-LAST_CKPT=$(find "experiments/${EXP_NAME}" -name "last.ckpt" -type f 2>/dev/null | head -1)
+LAST_CKPT=$(find "experiments/${EXP_NAME}" -name "last.ckpt" -type f 2>/dev/null | head -1 || true)
 if [ -n "$LAST_CKPT" ]; then
     echo "Resuming from checkpoint: $LAST_CKPT"
     RESUME_ARG="+ckpt_path=${LAST_CKPT}"
