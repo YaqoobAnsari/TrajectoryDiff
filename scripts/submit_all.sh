@@ -3,11 +3,12 @@
 # Submit all TrajectoryDiff experiments to SLURM with concurrency control.
 #
 # Respects the 4-job concurrent limit by checking squeue before each submission.
+# Uses 2g.35gb MIG profile by default, with 7g.141gb for trajectory_full (200 epochs).
 #
 # Usage:
-#   bash scripts/submit_all.sh [mig_profile]
-#   bash scripts/submit_all.sh 7g.141gb
-#   bash scripts/submit_all.sh 2g.35gb
+#   bash scripts/submit_all.sh [default_mig_profile]
+#   bash scripts/submit_all.sh             # 2g.35gb default, 7g.141gb for trajectory_full
+#   bash scripts/submit_all.sh 7g.141gb    # All on full GPU
 #
 # Experiments are submitted in priority order:
 #   1. Main models (trajectory_full, trajectory_baseline, uniform_baseline)
@@ -20,37 +21,39 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
-MIG_PROFILE="${1:-7g.141gb}"
+DEFAULT_MIG="${1:-2g.35gb}"
 MAX_CONCURRENT=4
 POLL_INTERVAL=60  # seconds between queue checks
 
 # ============================================================
-# Experiment Priority Order
+# Experiment Priority Order with MIG Overrides
 # ============================================================
+# Format: "experiment_name:mig_profile"
+# If mig_profile is "default", uses $DEFAULT_MIG
 EXPERIMENTS=(
     # Priority 1: Main models
-    "trajectory_full"
-    "trajectory_baseline"
-    "uniform_baseline"
+    "trajectory_full:7g.141gb"
+    "trajectory_baseline:default"
+    "uniform_baseline:default"
 
     # Priority 2: Ablations (identify which components matter)
-    "ablation_no_physics_loss"
-    "ablation_no_coverage_attention"
-    "ablation_no_trajectory_mask"
-    "ablation_no_coverage_density"
-    "ablation_no_tx_position"
-    "ablation_small_unet"
+    "ablation_no_physics_loss:default"
+    "ablation_no_coverage_attention:default"
+    "ablation_no_trajectory_mask:default"
+    "ablation_no_coverage_density:default"
+    "ablation_no_tx_position:default"
+    "ablation_small_unet:default"
 
     # Priority 3: Coverage sweeps
-    "coverage_sweep_1pct"
-    "coverage_sweep_5pct"
-    "coverage_sweep_10pct"
-    "coverage_sweep_20pct"
+    "coverage_sweep_1pct:default"
+    "coverage_sweep_5pct:default"
+    "coverage_sweep_10pct:default"
+    "coverage_sweep_20pct:default"
 
     # Priority 4: Cross-evaluation and sweeps
-    "cross_eval_traj_to_uniform"
-    "cross_eval_uniform_to_traj"
-    "num_trajectories_sweep"
+    "cross_eval_traj_to_uniform:default"
+    "cross_eval_uniform_to_traj:default"
+    "num_trajectories_sweep:default"
 )
 
 # ============================================================
@@ -76,7 +79,7 @@ wait_for_slot() {
 echo "=============================================="
 echo "TrajectoryDiff: Batch Experiment Submission"
 echo "=============================================="
-echo "MIG Profile: $MIG_PROFILE"
+echo "Default MIG Profile: $DEFAULT_MIG"
 echo "Max Concurrent: $MAX_CONCURRENT"
 echo "Total Experiments: ${#EXPERIMENTS[@]}"
 echo ""
@@ -85,7 +88,17 @@ SUBMITTED=0
 SKIPPED=0
 FAILED=0
 
-for EXP_NAME in "${EXPERIMENTS[@]}"; do
+for ENTRY in "${EXPERIMENTS[@]}"; do
+    # Parse experiment name and MIG profile
+    EXP_NAME="${ENTRY%%:*}"
+    MIG_OVERRIDE="${ENTRY##*:}"
+
+    if [ "$MIG_OVERRIDE" = "default" ]; then
+        MIG_PROFILE="$DEFAULT_MIG"
+    else
+        MIG_PROFILE="$MIG_OVERRIDE"
+    fi
+
     # Check config exists
     CONFIG_FILE="${PROJECT_DIR}/configs/experiment/${EXP_NAME}.yaml"
     if [ ! -f "$CONFIG_FILE" ]; then
@@ -106,7 +119,7 @@ for EXP_NAME in "${EXPERIMENTS[@]}"; do
     wait_for_slot
 
     # Submit
-    echo "[SUBMIT] $EXP_NAME..."
+    echo "[SUBMIT] $EXP_NAME (MIG: $MIG_PROFILE)..."
     if bash "${SCRIPT_DIR}/submit_experiment.sh" "$EXP_NAME" "$MIG_PROFILE" 2>&1 | tail -1; then
         SUBMITTED=$((SUBMITTED + 1))
     else

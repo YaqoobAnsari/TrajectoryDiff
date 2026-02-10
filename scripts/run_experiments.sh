@@ -1,8 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=trajdiff
-#SBATCH --partition=gpu
-#SBATCH --gres=gpu:1
-#SBATCH --time=24:00:00
+#SBATCH --partition=gpu2
+#SBATCH --nodelist=deepnet2
+#SBATCH --mcs-label=unicellular
+#SBATCH --time=36:00:00
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=16
 #SBATCH --output=experiments/logs/%x_%A_%a.out
@@ -13,16 +14,16 @@
 # Usage (single experiment):
 #   sbatch --export=EXP_NAME=trajectory_full scripts/run_experiments.sh
 #
-# Usage (with MIG profile):
-#   sbatch --export=EXP_NAME=trajectory_full,MIG_PROFILE=7g.141gb scripts/run_experiments.sh
+# Usage (with MIG profile override via submit_experiment.sh):
+#   bash scripts/submit_experiment.sh trajectory_full 7g.141gb
 #
-# Usage (with custom andrew ID for mcs-label):
-#   sbatch --mcs-label=<your_andrew_id> --export=EXP_NAME=trajectory_full scripts/run_experiments.sh
+# Note: --gres and --time are passed by submit_experiment.sh as sbatch
+# command-line args, which override the SBATCH headers above.
 #
 # Prerequisites:
 #   - conda environment 'trajdiff' created
-#   - W&B logged in: wandb login
 #   - Data at data/raw/
+#   - wandb runs in offline mode by default (sync later with wandb sync)
 
 set -euo pipefail
 
@@ -37,6 +38,9 @@ echo "Node: $(hostname)"
 echo "Date: $(date)"
 echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'N/A')"
 echo ""
+
+# wandb offline mode (sync later with: wandb login && wandb sync experiments/*/wandb/)
+export WANDB_MODE=offline
 
 # Activate conda environment
 source ~/.bashrc
@@ -133,6 +137,7 @@ python scripts/train.py \
     hardware.precision=$PRECISION \
     hardware.slurm=true \
     logging.wandb.enabled=true \
+    logging.wandb.offline=true \
     logging.wandb.project=$WANDB_PROJECT \
     $RESUME_ARG
 

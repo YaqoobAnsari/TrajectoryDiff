@@ -22,7 +22,7 @@
 | Phase 1: Data Pipeline | ✅ Complete | 13 tests | src/data/ |
 | Phase 2: Model Development | ✅ Complete | 88 tests | src/models/, src/training/ |
 | Phase 3: Physics + Architecture | ✅ Complete | 98 new tests | losses.py, coverage_unet.py, attention.py |
-| Phase 4: Experiments | ✅ Configs Ready | - | 16 experiment configs, SLURM scripts |
+| Phase 4: Experiments | 🔄 In Progress | - | 16 experiment configs, SLURM scripts, analysis scripts |
 | Phase 5: Paper Writing | ⬜ Not Started | - | - |
 
 **Total Tests: 199 passing (9 test files) | Version: v0.4.0-experiment-ready**
@@ -622,12 +622,19 @@ class TrajectoryConditionedUNet(nn.Module):
 
 ---
 
-## Phase 4: Experiments (Week 8) ✅ CONFIGS READY
+## Phase 4: Experiments (Week 8) 🔄 IN PROGRESS
 
 ### Goals
 - [x] 16 experiment configurations created
 - [x] SLURM training scripts for H200 GPUs
 - [x] Evaluation scripts with dBm-scale metrics
+- [x] SLURM scripts fixed (partition=gpu2, MIG gres, nodelist=deepnet2, mcs-label)
+- [x] wandb offline mode configured
+- [x] GPU validation script created
+- [x] Classical baseline evaluation script created
+- [x] Uncertainty analysis script created
+- [x] Paper figure generation script created
+- [ ] Run GPU validation on cluster
 - [ ] Run experiments on GPU cluster
 - [ ] Analyze results
 
@@ -699,9 +706,15 @@ def estimate_uncertainty(model, floor_plan, trajectory_data, n_samples=10):
 ### Deliverables
 - [x] `src/training/losses.py` with physics-informed losses
 - [x] 16 experiment configs in `configs/experiment/`
-- [x] `scripts/run_experiments.sh` - SLURM training launcher
+- [x] `scripts/run_experiments.sh` - SLURM training launcher (fixed: partition, gres, nodelist, mcs-label, wandb offline)
+- [x] `scripts/submit_experiment.sh` - Per-experiment submitter with MIG profile selection
+- [x] `scripts/submit_all.sh` - Batch submission with concurrency control
 - [x] `scripts/run_evaluation.sh` - Batch evaluation
-- [ ] Run experiments and collect results
+- [x] `scripts/gpu_validation.sh` - GPU pipeline validation job
+- [x] `scripts/run_baselines.py` - Classical baseline evaluation
+- [x] `scripts/analyze_uncertainty.py` - Uncertainty calibration analysis
+- [x] `scripts/generate_figures.py` - Paper figure generation
+- [ ] Run GPU validation and experiments
 
 ---
 

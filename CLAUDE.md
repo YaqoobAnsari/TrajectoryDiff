@@ -69,8 +69,14 @@ TrajectoryDiff/
 │   ├── evaluate.py           # Evaluation with dBm-scale metrics
 │   ├── smoke_test.py         # Lightning-based smoke test (full epochs)
 │   ├── smoke_test_quick.py   # Fast manual smoke test (~15s on CPU)
-│   ├── run_experiments.sh    # SLURM/SSH: run all 16 experiments
-│   └── run_evaluation.sh    # SLURM/SSH: batch evaluation
+│   ├── run_experiments.sh    # SLURM job script (partition=gpu2, MIG gres)
+│   ├── submit_experiment.sh  # Submit single experiment with MIG profile
+│   ├── submit_all.sh         # Submit all 16 experiments with concurrency control
+│   ├── gpu_validation.sh     # Quick GPU validation job (30 min)
+│   ├── run_evaluation.sh     # SLURM/SSH: batch evaluation
+│   ├── run_baselines.py      # Classical baseline evaluation (IDW, RBF, etc.)
+│   ├── analyze_uncertainty.py # Uncertainty calibration analysis
+│   └── generate_figures.py   # Paper figure generation
 ├── tests/                     # 199 tests (9 test files)
 ├── notebooks/                 # Jupyter notebooks for exploration
 ├── experiments/               # Experiment outputs (gitignored)
@@ -221,10 +227,11 @@ Each trajectory produces: `[(t, x, y, rss), ...]` with optional noise injection.
 
 ## Current Focus
 
-**Phase**: Experiment-ready (v0.4.0) | All code complete, ready for GPU training via SSH/SLURM
+**Phase**: Experiment execution (v0.4.0) | SLURM scripts fixed, analysis scripts ready, submitting to GPU cluster
 
 ### Immediate Next Steps:
-1. SSH to GPU cluster (deepnet2 with H200 GPUs)
-2. Run full experiment suite via `scripts/run_experiments.sh`
-3. Evaluate checkpoints via `scripts/run_evaluation.sh`
-4. Analyze results and write paper
+1. Run GPU validation: `sbatch scripts/gpu_validation.sh`
+2. Submit experiments: `bash scripts/submit_all.sh`
+3. Run baselines: `python scripts/run_baselines.py`
+4. Analyze uncertainty: `python scripts/analyze_uncertainty.py --checkpoint <best.ckpt>`
+5. Generate figures: `python scripts/generate_figures.py --checkpoint <best.ckpt>`

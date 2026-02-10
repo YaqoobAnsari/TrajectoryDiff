@@ -1172,10 +1172,13 @@ python scripts/generate_figures.py --results-dir results/ --output-dir figures/
 - [x] `configs/experiment/cross_eval_uniform_to_traj.yaml`
 - [x] `configs/experiment/coverage_sweep_{1,5,10,20}pct.yaml`
 - [x] `configs/experiment/num_trajectories_sweep.yaml`
-- [x] `scripts/run_experiments.sh` - SLURM training script
+- [x] `scripts/run_experiments.sh` - SLURM training script (fixed: partition=gpu2, MIG gres, nodelist, mcs-label, wandb offline)
+- [x] `scripts/submit_experiment.sh` - Per-experiment SLURM submitter with MIG profile selection
+- [x] `scripts/submit_all.sh` - Batch submission with concurrency control and MIG overrides
 - [x] `scripts/run_evaluation.sh` - Batch evaluation
 - [x] `scripts/smoke_test_quick.py` - Fast pipeline verification
-- [ ] `scripts/run_baselines.py` - Classical baseline evaluation
-- [ ] `scripts/analyze_uncertainty.py` - Uncertainty calibration
-- [ ] `scripts/generate_figures.py` - Paper figure generation
+- [x] `scripts/gpu_validation.sh` - GPU pipeline validation job (30 min)
+- [x] `scripts/run_baselines.py` - Classical baseline evaluation
+- [x] `scripts/analyze_uncertainty.py` - Uncertainty calibration
+- [x] `scripts/generate_figures.py` - Paper figure generation
 - [ ] `notebooks/analysis.ipynb` - Results analysis

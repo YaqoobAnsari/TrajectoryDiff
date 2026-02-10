@@ -7,12 +7,12 @@
 #
 # Examples:
 #   bash scripts/submit_experiment.sh trajectory_full
-#   bash scripts/submit_experiment.sh trajectory_full 2g.35gb
-#   bash scripts/submit_experiment.sh ablation_no_physics_loss 7g.141gb --time=48:00:00
+#   bash scripts/submit_experiment.sh trajectory_full 7g.141gb
+#   bash scripts/submit_experiment.sh ablation_no_physics_loss 2g.35gb --time=48:00:00
 #
-# MIG Profiles:
-#   7g.141gb  - Full H200 GPU (default), batch_size=64, 12 workers
-#   2g.35gb   - 1/4 GPU, batch_size=32, 8 workers
+# MIG Profiles (NVIDIA H200 on deepnet2):
+#   7g.141gb  - Full H200 GPU, batch_size=64, 12 workers
+#   2g.35gb   - 1/4 GPU, batch_size=32, 8 workers (default)
 #   1g.18gb   - 1/8 GPU, batch_size=16, 4 workers
 
 set -euo pipefail
@@ -21,7 +21,7 @@ set -euo pipefail
 # Arguments
 # ============================================================
 EXP_NAME="${1:?ERROR: Missing experiment name. Usage: bash scripts/submit_experiment.sh <experiment_name> [mig_profile]}"
-MIG_PROFILE="${2:-7g.141gb}"
+MIG_PROFILE="${2:-2g.35gb}"
 shift 2 2>/dev/null || shift 1 2>/dev/null || true
 EXTRA_SBATCH_ARGS="$*"
 
@@ -46,29 +46,37 @@ fi
 # ============================================================
 case "$MIG_PROFILE" in
     7g.141gb)
+        GRES="gpu:nvidia_h200_7g.141gb:1"
+        TIME="24:00:00"
         BATCH_SIZE=64
         NUM_WORKERS=12
         MEM="64G"
         CPUS=16
         ;;
     2g.35gb)
+        GRES="gpu:nvidia_h200_2g.35gb:1"
+        TIME="36:00:00"
         BATCH_SIZE=32
         NUM_WORKERS=8
         MEM="32G"
         CPUS=8
         ;;
     1g.18gb)
+        GRES="gpu:nvidia_h200_1g.18gb:1"
+        TIME="48:00:00"
         BATCH_SIZE=16
         NUM_WORKERS=4
         MEM="16G"
         CPUS=4
         ;;
     *)
-        echo "WARNING: Unknown MIG profile '$MIG_PROFILE', using defaults for 7g.141gb"
-        BATCH_SIZE=64
-        NUM_WORKERS=12
-        MEM="64G"
-        CPUS=16
+        echo "WARNING: Unknown MIG profile '$MIG_PROFILE', using defaults for 2g.35gb"
+        GRES="gpu:nvidia_h200_2g.35gb:1"
+        TIME="36:00:00"
+        BATCH_SIZE=32
+        NUM_WORKERS=8
+        MEM="32G"
+        CPUS=8
         ;;
 esac
 
@@ -83,6 +91,8 @@ mkdir -p "${PROJECT_DIR}/experiments/logs"
 echo "=============================================="
 echo "Submitting: $EXP_NAME"
 echo "MIG Profile: $MIG_PROFILE"
+echo "GRES: $GRES"
+echo "Time Limit: $TIME"
 echo "Batch Size: $BATCH_SIZE"
 echo "Workers: $NUM_WORKERS"
 echo "Memory: $MEM"
@@ -91,6 +101,8 @@ echo "=============================================="
 
 JOB_ID=$(sbatch \
     --parsable \
+    --gres="${GRES}" \
+    --time="${TIME}" \
     --export=EXP_NAME="${EXP_NAME}",MIG_PROFILE="${MIG_PROFILE}",BATCH_SIZE="${BATCH_SIZE}",NUM_WORKERS="${NUM_WORKERS}" \
     --mem="${MEM}" \
     --cpus-per-task="${CPUS}" \
