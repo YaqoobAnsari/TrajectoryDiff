@@ -31,9 +31,8 @@ echo "Date: $(date)"
 echo ""
 
 # Activate conda environment
-# Source conda directly (bashrc guards against non-interactive shells)
-source /opt/anaconda3/etc/profile.d/conda.sh
-conda activate trajdiff || { echo "ERROR: Failed to activate conda env 'trajdiff'"; exit 1; }
+# Directly prepend the trajdiff env to PATH (system conda is not accessible on compute nodes)
+export PATH="/data1/yansari/.conda/envs/trajdiff/bin:$PATH"
 
 # Navigate to project root
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
