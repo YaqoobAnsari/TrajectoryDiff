@@ -62,7 +62,7 @@ case "$MIG_PROFILE" in
         NUM_WORKERS="${NUM_WORKERS:-12}"
         ;;
     2g.35gb)
-        BATCH_SIZE="${BATCH_SIZE:-32}"
+        BATCH_SIZE="${BATCH_SIZE:-16}"
         NUM_WORKERS="${NUM_WORKERS:-8}"
         ;;
     1g.18gb)

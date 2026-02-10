@@ -56,7 +56,7 @@ case "$MIG_PROFILE" in
     2g.35gb)
         GRES="gpu:nvidia_h200_2g.35gb:1"
         TIME="36:00:00"
-        BATCH_SIZE=32
+        BATCH_SIZE=16
         NUM_WORKERS=8
         MEM="32G"
         CPUS=8
