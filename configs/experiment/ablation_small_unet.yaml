@@ -1,6 +1,5 @@
-# Ablation: Small UNet (efficiency vs quality trade-off)
-
 # @package _global_
+# Ablation: Small UNet (efficiency vs quality trade-off)
 
 experiment:
   name: ablation_small_unet

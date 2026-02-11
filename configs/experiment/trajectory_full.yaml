@@ -1,7 +1,6 @@
+# @package _global_
 # Experiment: Full TrajectoryDiff (main model, all features)
 # This is the primary model with all novel contributions enabled.
-
-# @package _global_
 
 experiment:
   name: trajectory_full

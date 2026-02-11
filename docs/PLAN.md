@@ -637,7 +637,8 @@ class TrajectoryConditionedUNet(nn.Module):
 - [x] Run GPU validation on cluster (smoke test + 1-epoch training on 2g.35gb)
 - [x] OOM fixes: batch=8+accum=2 for 2g.35gb, PYTORCH_CUDA_ALLOC_CONF, TF32 matmul
 - [x] Wave 1 submitted: trajectory_full, trajectory_baseline, uniform_baseline, ablation_no_physics_loss
-- [ ] Wave 1 training completes (~24-36h)
+- [x] Wave 1 re-submitted as jobs 2683-2686 (originals 2674-2681 FAILED)
+- [ ] Wave 1 training completes (jobs will need checkpoint resumption — time limits insufficient for 200 epochs)
 - [ ] Submit Waves 2-4 (remaining ablations, sweeps, cross-eval)
 - [ ] Run classical baselines (scripts/run_baselines.py)
 - [ ] Analyze results

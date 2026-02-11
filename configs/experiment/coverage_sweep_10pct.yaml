@@ -1,6 +1,5 @@
-# Coverage Sweep: ~10% coverage (3 trajectories, 100 points each) -- default
-
 # @package _global_
+# Coverage Sweep: ~10% coverage (3 trajectories, 100 points each) -- default
 
 experiment:
   name: coverage_sweep_10pct

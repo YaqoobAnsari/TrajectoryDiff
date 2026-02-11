@@ -1,6 +1,5 @@
-# Coverage Sweep: ~5% coverage (2 trajectories, 80 points each)
-
 # @package _global_
+# Coverage Sweep: ~5% coverage (2 trajectories, 80 points each)
 
 experiment:
   name: coverage_sweep_5pct

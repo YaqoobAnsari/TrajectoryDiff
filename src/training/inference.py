@@ -259,16 +259,26 @@ class DiffusionInference:
 
 def denormalize_radio_map(
     x: torch.Tensor,
-    min_val: float = -120.0,
-    max_val: float = 0.0,
+    min_val: float = -186.0,
+    max_val: float = -47.0,
 ) -> torch.Tensor:
     """
     Denormalize radio map from [-1, 1] back to dBm scale.
 
+    The RadioMapSeer dataset encodes pathloss as PNG [0, 255]:
+        dBm = (png / 255) * 139 + (-186)
+    giving a range of [-186, -47] dBm.
+
+    The dataset normalizes PNG to [-1, 1]:
+        norm = png / 255 * 2 - 1
+
+    So the combined inverse is:
+        dBm = (norm + 1) / 2 * (max_val - min_val) + min_val
+
     Args:
         x: Normalized radio map in [-1, 1]
-        min_val: Minimum dBm value (default: -120)
-        max_val: Maximum dBm value (default: 0)
+        min_val: Minimum dBm value (default: -186, RadioMapSeer)
+        max_val: Maximum dBm value (default: -47, RadioMapSeer)
 
     Returns:
         Radio map in dBm scale

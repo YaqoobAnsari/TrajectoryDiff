@@ -247,13 +247,16 @@ Each trajectory produces: `[(t, x, y, rss), ...]` with optional noise injection.
 
 **Phase**: GPU Training (v0.4.0) | Wave 1 of 4 running on SLURM cluster
 
-### Wave 1 (Running - Feb 10, 2026):
-| Job | Experiment | MIG | Batch | Epochs |
-|-----|-----------|-----|-------|--------|
-| 2674 | trajectory_full | 7g.141gb | 64 | 200 |
-| 2679 | trajectory_baseline | 2g.35gb | 8 x accum=2 | 200 |
-| 2680 | uniform_baseline | 2g.35gb | 8 x accum=2 | 200 |
-| 2681 | ablation_no_physics_loss | 2g.35gb | 8 x accum=2 | 200 |
+### Wave 1 (Running - re-submitted Feb 10, 2026 ~21:47):
+| Job | Experiment | MIG | Batch | Epochs | Status (as of ~10h in) |
+|-----|-----------|-----|-------|--------|------------------------|
+| 2683 | trajectory_full | 7g.141gb | 32 x accum=2 | 200 | Epoch 22, val/loss=0.0329, ~25 min/epoch |
+| 2684 | trajectory_baseline | 2g.35gb | 8 x accum=2 | 200 | Epoch 13, val/loss=0.0041, ~41 min/epoch |
+| 2685 | uniform_baseline | 2g.35gb | 8 x accum=2 | 200 | Epoch 18, val/loss=0.0039, ~30 min/epoch |
+| 2686 | ablation_no_physics_loss | 2g.35gb | 8 x accum=2 | 200 | PENDING (QOSMaxGRESPerUser) |
+
+**Note:** Original Wave 1 jobs (2674-2681) all FAILED and were re-submitted as 2683-2686.
+Time limits (24h/36h) are insufficient for 200 epochs — jobs will need checkpoint resumption.
 
 ### Remaining Waves:
 - **Wave 2**: ablation_no_coverage_attention, ablation_no_trajectory_mask, ablation_no_coverage_density, ablation_no_tx_position

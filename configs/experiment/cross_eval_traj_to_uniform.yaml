@@ -1,7 +1,6 @@
+# @package _global_
 # Cross-Evaluation: Train on trajectory sampling, evaluate on uniform
 # Tests how trajectory-trained model generalizes to uniform coverage patterns
-
-# @package _global_
 
 experiment:
   name: cross_eval_traj_to_uniform

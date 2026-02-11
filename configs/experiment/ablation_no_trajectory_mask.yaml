@@ -1,6 +1,5 @@
-# Ablation: Disable trajectory mask conditioning
-
 # @package _global_
+# Ablation: Disable trajectory mask conditioning
 
 experiment:
   name: ablation_no_trajectory_mask

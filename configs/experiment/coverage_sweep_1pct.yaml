@@ -1,7 +1,6 @@
+# @package _global_
 # Coverage Sweep: ~1% coverage (1 trajectory, 50 points)
 # Extreme low-coverage regime
-
-# @package _global_
 
 experiment:
   name: coverage_sweep_1pct

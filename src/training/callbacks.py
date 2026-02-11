@@ -83,7 +83,22 @@ class WandBSampleLogger(Callback):
             samples = pl_module.sample(condition, use_ddim=self.use_ddim, progress=False)
 
         # Log to wandb
-        self._log_samples(trainer, batch, samples)
+        try:
+            self._log_samples(trainer, batch, samples)
+        except Exception as e:
+            print(f"WandBSampleLogger: Failed to log samples at epoch {trainer.current_epoch}: {e}")
+
+    def _get_wandb_logger(self, trainer: L.Trainer):
+        """Find the WandB logger among trainer's loggers."""
+        from lightning.pytorch.loggers import WandbLogger
+
+        if hasattr(trainer, 'loggers'):
+            for logger in trainer.loggers:
+                if isinstance(logger, WandbLogger):
+                    return logger
+        if isinstance(trainer.logger, WandbLogger):
+            return trainer.logger
+        return None
 
     def _log_samples(
         self,
@@ -93,7 +108,10 @@ class WandBSampleLogger(Callback):
     ):
         """Log samples to W&B."""
         import wandb
-        import numpy as np
+
+        wandb_logger = self._get_wandb_logger(trainer)
+        if wandb_logger is None:
+            return
 
         log_dict = {}
         n = samples.shape[0]
@@ -149,8 +167,8 @@ class WandBSampleLogger(Callback):
         except Exception:
             pass
 
-        # Log
-        trainer.logger.experiment.log(
+        # Log via W&B logger
+        wandb_logger.experiment.log(
             log_dict,
             step=trainer.global_step,
         )

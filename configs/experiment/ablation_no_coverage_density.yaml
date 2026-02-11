@@ -1,6 +1,5 @@
-# Ablation: Disable coverage density conditioning
-
 # @package _global_
+# Ablation: Disable coverage density conditioning
 
 experiment:
   name: ablation_no_coverage_density

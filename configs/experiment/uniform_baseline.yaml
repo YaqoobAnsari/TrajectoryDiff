@@ -1,7 +1,6 @@
+# @package _global_
 # Experiment: Uniform Sampling Baseline
 # Uses uniform random sampling instead of trajectory sampling
-
-# @package _global_
 
 experiment:
   name: uniform_baseline

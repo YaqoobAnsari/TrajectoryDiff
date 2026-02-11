@@ -1,7 +1,6 @@
+# @package _global_
 # Trajectory Count Sweep: Vary number of trajectories
 # Use Hydra multirun: python scripts/train.py -m experiment=num_trajectories_sweep data.sampling.trajectory.num_trajectories=1,2,3,5,8
-
-# @package _global_
 
 experiment:
   name: num_trajectories_sweep

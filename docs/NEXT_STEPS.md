@@ -1,19 +1,23 @@
 # TrajectoryDiff: Comprehensive Next Steps Guide
 
-## Current Status (Feb 10, 2026)
+## Current Status (Feb 11, 2026)
 
 **Version:** v0.4.0-experiment-ready
 **Phases Complete:** 0, 1, 2, 3 (Setup, Data, Model, Physics/Architecture + Bug Fixes + Integration)
 **Tests Passing:** 199 (9 test files)
-**Phase 4 Status:** Wave 1 training on SLURM cluster (deepnet2 H200)
+**Phase 4 Status:** Wave 1 training on SLURM cluster (deepnet2 H200), eval pipeline ready
 
-### Active SLURM Jobs (Wave 1)
-| Job ID | Experiment | MIG Profile | Batch | Status | Est. Duration |
-|--------|-----------|-------------|-------|--------|---------------|
-| 2674 | trajectory_full | 7g.141gb (141GB) | 64 | RUNNING (Epoch 1+) | ~8-10h |
-| 2679 | trajectory_baseline | 2g.35gb (32.5GB) | 8 x accum=2 | RUNNING (Epoch 0) | ~36h |
-| 2680 | uniform_baseline | 2g.35gb (32.5GB) | 8 x accum=2 | RUNNING (Epoch 0) | ~36h |
-| 2681 | ablation_no_physics_loss | 2g.35gb (32.5GB) | 8 x accum=2 | PENDING (QOS limit) | ~36h |
+### Active SLURM Jobs (Wave 1 — re-submitted Feb 10 ~21:47)
+| Job ID | Experiment | MIG Profile | Batch | Status (as of ~10h in) | Epoch Rate |
+|--------|-----------|-------------|-------|------------------------|------------|
+| 2683 | trajectory_full | 7g.141gb (141GB) | 32 x accum=2 | RUNNING — Epoch 22/200, val/loss=0.0329 | ~25 min/epoch |
+| 2684 | trajectory_baseline | 2g.35gb (32.5GB) | 8 x accum=2 | RUNNING — Epoch 13/200, val/loss=0.0041 | ~41 min/epoch |
+| 2685 | uniform_baseline | 2g.35gb (32.5GB) | 8 x accum=2 | RUNNING — Epoch 18/200, val/loss=0.0039 | ~30 min/epoch |
+| 2686 | ablation_no_physics_loss | 2g.35gb (32.5GB) | 8 x accum=2 | PENDING (QOSMaxGRESPerUser) | — |
+
+**Note:** Original Wave 1 jobs (2674-2681) all FAILED and were re-submitted as 2683-2686.
+Time limits (24h for 7g.141gb, 36h for 2g.35gb) are insufficient for 200 epochs.
+Jobs will need checkpoint resumption after hitting wall time.
 
 ### What We Have
 - Complete diffusion model with trajectory conditioning
@@ -27,6 +31,7 @@
 - **16 experiment configs** (ablations, cross-eval, coverage/trajectory sweeps)
 - **SLURM training scripts** for H200 GPUs
 - Smoke tested with real RadioMapSeer data
+- **Post-evaluation pipeline** (aggregate, tables, figures — see below)
 
 ### What We Need
 - ~~Physics-informed losses~~ ✅ DONE
@@ -36,10 +41,40 @@
 - ~~GPU validation~~ ✅ DONE (smoke test + 1-epoch training passed)
 - ~~SLURM OOM fixes~~ ✅ DONE (batch sizing, CUDA alloc config, TF32 matmul)
 - ~~Wave 1 submission~~ ✅ DONE (4 jobs running/pending)
+- ~~Evaluation pipeline~~ ✅ DONE (dBm baselines, aggregator, figures, batch eval)
 - Wave 1 training completes (est. ~36h)
 - Submit Waves 2-4 (remaining 12 experiments)
-- Run classical baselines (scripts/run_baselines.py)
+- Run evaluations: `bash scripts/submit_all_evaluations.sh`
 - Analyze results and write paper
+
+### Evaluation Pipeline
+
+When training jobs finish, the following pipeline produces paper-ready results:
+
+```bash
+# 1. Submit eval for a single experiment (auto-finds best checkpoint):
+sbatch --gres=gpu:nvidia_h200_2g.35gb:1 \
+  --export=EXPERIMENT=uniform_baseline \
+  scripts/submit_evaluation.sh
+
+# 2. Submit evals for ALL completed experiments:
+bash scripts/submit_all_evaluations.sh 2g.35gb
+bash scripts/submit_all_evaluations.sh 2g.35gb --dry-run  # preview
+
+# 3. Aggregate results (can run incrementally):
+python scripts/aggregate_results.py --eval-dir experiments/eval_results --verbose
+
+# 4. Generate figures:
+python scripts/generate_figures.py --results-dir experiments/eval_results --output-dir figures/
+python scripts/generate_figures.py --checkpoint path/to/best.ckpt  # + qualitative figs
+```
+
+**Outputs:**
+- `experiments/eval_results/summary.json` — all metrics in one file
+- `experiments/eval_results/summary.csv` — spreadsheet-friendly
+- `experiments/eval_results/summary.md` — markdown tables
+- `experiments/eval_results/tables.tex` — copy-paste into paper
+- `figures/` — ablation bar chart, coverage sweep, main results table
 
 ---
 

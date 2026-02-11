@@ -1,6 +1,5 @@
-# Ablation: Disable physics-informed losses (standard MSE only)
-
 # @package _global_
+# Ablation: Disable physics-informed losses (standard MSE only)
 
 experiment:
   name: ablation_no_physics_loss

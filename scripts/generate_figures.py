@@ -26,6 +26,20 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+
+try:
+    from data import RadioMapDataModule
+    from training import DiffusionInference, denormalize_radio_map
+    from models.baselines.interpolation import IDWBaseline, NearestNeighborBaseline
+    MODEL_IMPORTS_AVAILABLE = True
+except ImportError:
+    MODEL_IMPORTS_AVAILABLE = False
+
 from utils.visualization import set_style, RADIO_CMAP, ERROR_CMAP
 
 
@@ -55,10 +69,10 @@ def plot_ablation_chart(results_dir: Path, output_dir: Path):
     found = False
 
     for exp_name, label in ablation_experiments:
-        metrics_path = results_dir / f"{exp_name}_eval.json"
+        # Prefer subdirectory structure (from evaluate.py)
+        metrics_path = results_dir / exp_name / "metrics.json"
         if not metrics_path.exists():
-            # Try alternative naming
-            metrics_path = results_dir / exp_name / "metrics.json"
+            metrics_path = results_dir / f"{exp_name}_eval.json"
         if metrics_path.exists():
             metrics = load_json(metrics_path)
             rmse_key = "rmse_dbm" if "rmse_dbm" in metrics else "rmse"
@@ -104,9 +118,9 @@ def plot_coverage_sweep(results_dir: Path, output_dir: Path):
     found = False
 
     for cov, exp_name in zip(coverage_levels, exp_names):
-        metrics_path = results_dir / f"{exp_name}_eval.json"
+        metrics_path = results_dir / exp_name / "metrics.json"
         if not metrics_path.exists():
-            metrics_path = results_dir / exp_name / "metrics.json"
+            metrics_path = results_dir / f"{exp_name}_eval.json"
         if metrics_path.exists():
             metrics = load_json(metrics_path)
             rmse_key = "rmse_dbm" if "rmse_dbm" in metrics else "rmse"
@@ -162,9 +176,9 @@ def plot_main_results_table(results_dir: Path, output_dir: Path):
 
     # Load model results
     for exp_name, label in experiments[1:]:
-        metrics_path = results_dir / f"{exp_name}_eval.json"
+        metrics_path = results_dir / exp_name / "metrics.json"
         if not metrics_path.exists():
-            metrics_path = results_dir / exp_name / "metrics.json"
+            metrics_path = results_dir / f"{exp_name}_eval.json"
         if metrics_path.exists():
             m = load_json(metrics_path)
             rows.append([
@@ -207,13 +221,13 @@ def plot_main_results_table(results_dir: Path, output_dir: Path):
 # ============================================================
 # Figure 4: Qualitative Comparison Grid
 # ============================================================
-def plot_qualitative_comparison(checkpoint_path: str, output_dir: Path, num_samples: int = 4):
+def plot_qualitative_comparison(
+    checkpoint_path: str, output_dir: Path, num_samples: int = 4, data_dir: str = "data/raw"
+):
     """Generate qualitative comparison figure from a trained model."""
-    import torch
-
-    from data import RadioMapDataModule
-    from training import DiffusionInference, denormalize_radio_map
-    from models.baselines.interpolation import IDWBaseline, NearestNeighborBaseline
+    if not TORCH_AVAILABLE or not MODEL_IMPORTS_AVAILABLE:
+        print("  [SKIP] torch or model imports not available for qualitative comparison")
+        return
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -221,7 +235,7 @@ def plot_qualitative_comparison(checkpoint_path: str, output_dir: Path, num_samp
     inference = DiffusionInference.from_checkpoint(checkpoint_path, device=device, use_ema=True)
 
     datamodule = RadioMapDataModule(
-        data_dir="data/raw",
+        data_dir=data_dir,
         batch_size=num_samples,
         num_workers=4,
         sampling_strategy="trajectory",
@@ -312,18 +326,19 @@ def plot_qualitative_comparison(checkpoint_path: str, output_dir: Path, num_samp
 # ============================================================
 # Figure 5: Uncertainty Visualization
 # ============================================================
-def plot_uncertainty_figure(checkpoint_path: str, output_dir: Path, num_diffusion_samples: int = 10):
+def plot_uncertainty_figure(
+    checkpoint_path: str, output_dir: Path, num_diffusion_samples: int = 10, data_dir: str = "data/raw"
+):
     """Generate uncertainty visualization from a trained model."""
-    import torch
-
-    from data import RadioMapDataModule
-    from training import DiffusionInference
+    if not TORCH_AVAILABLE or not MODEL_IMPORTS_AVAILABLE:
+        print("  [SKIP] torch or model imports not available for uncertainty figure")
+        return
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     inference = DiffusionInference.from_checkpoint(checkpoint_path, device=device, use_ema=True)
 
     datamodule = RadioMapDataModule(
-        data_dir="data/raw",
+        data_dir=data_dir,
         batch_size=3,
         num_workers=4,
         sampling_strategy="trajectory",
@@ -397,6 +412,7 @@ def main():
     parser.add_argument("--output-dir", default="figures", help="Output directory for figures")
     parser.add_argument("--checkpoint", default=None,
                         help="Path to best checkpoint (for qualitative + uncertainty figures)")
+    parser.add_argument("--data-dir", default="data/raw", help="Path to RadioMapSeer data")
     parser.add_argument("--num-samples", type=int, default=4, help="Samples for qualitative figure")
     args = parser.parse_args()
 
@@ -415,15 +431,36 @@ def main():
 
     # Figures from metrics JSON files
     print("Generating metrics-based figures...")
-    plot_ablation_chart(results_dir, output_dir)
-    plot_coverage_sweep(results_dir, output_dir)
-    plot_main_results_table(results_dir, output_dir)
+    try:
+        plot_ablation_chart(results_dir, output_dir)
+    except Exception as e:
+        print(f"  [ERROR] Ablation chart failed: {e}")
+
+    try:
+        plot_coverage_sweep(results_dir, output_dir)
+    except Exception as e:
+        print(f"  [ERROR] Coverage sweep failed: {e}")
+
+    try:
+        plot_main_results_table(results_dir, output_dir)
+    except Exception as e:
+        print(f"  [ERROR] Main results table failed: {e}")
 
     # Figures requiring model checkpoint
     if args.checkpoint and Path(args.checkpoint).exists():
         print(f"\nGenerating model-based figures (checkpoint: {args.checkpoint})...")
-        plot_qualitative_comparison(args.checkpoint, output_dir, num_samples=args.num_samples)
-        plot_uncertainty_figure(args.checkpoint, output_dir)
+        try:
+            plot_qualitative_comparison(
+                args.checkpoint, output_dir,
+                num_samples=args.num_samples, data_dir=args.data_dir,
+            )
+        except Exception as e:
+            print(f"  [ERROR] Qualitative comparison failed: {e}")
+
+        try:
+            plot_uncertainty_figure(args.checkpoint, output_dir, data_dir=args.data_dir)
+        except Exception as e:
+            print(f"  [ERROR] Uncertainty figure failed: {e}")
     elif args.checkpoint:
         print(f"\nWARNING: Checkpoint not found: {args.checkpoint}")
         print("  Skipping qualitative comparison and uncertainty figures.")

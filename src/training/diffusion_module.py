@@ -385,6 +385,19 @@ class DiffusionModule(L.LightningModule):
 
         return {'val_loss': loss}
 
+    def test_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> Dict[str, torch.Tensor]:
+        """
+        Test step (same as validation).
+
+        Args:
+            batch: Dictionary containing radio_map, building_map, sparse_rss, etc.
+            batch_idx: Batch index
+
+        Returns:
+            Dictionary with loss and metrics
+        """
+        return self.validation_step(batch, batch_idx)
+
     def on_validation_epoch_end(self):
         """Generate samples at end of validation epoch."""
         if (self.current_epoch + 1) % self.sample_every_n_epochs != 0:

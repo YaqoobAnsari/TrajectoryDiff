@@ -1,7 +1,6 @@
+# @package _global_
 # Experiment: Trajectory Sampling Baseline
 # Standard trajectory model without novel contributions (ablation baseline)
-
-# @package _global_
 
 experiment:
   name: trajectory_baseline

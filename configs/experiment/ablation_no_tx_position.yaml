@@ -1,6 +1,5 @@
-# Ablation: Disable TX position conditioning
-
 # @package _global_
+# Ablation: Disable TX position conditioning
 
 experiment:
   name: ablation_no_tx_position

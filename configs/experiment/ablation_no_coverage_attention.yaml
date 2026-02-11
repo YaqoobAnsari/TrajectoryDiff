@@ -1,6 +1,5 @@
-# Ablation: Disable coverage-aware attention (use standard UNet attention)
-
 # @package _global_
+# Ablation: Disable coverage-aware attention (use standard UNet attention)
 
 experiment:
   name: ablation_no_coverage_attention
