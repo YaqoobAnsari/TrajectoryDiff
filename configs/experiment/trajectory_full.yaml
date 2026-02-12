@@ -30,10 +30,12 @@ model:
   physics:
     enabled: true
     trajectory_consistency:
-      weight: 0.1
+      weight: 0.5
     coverage_weighted: true
     distance_decay:
-      weight: 0.01
+      weight: 0.1
+    warmup_epochs: 30
+    rampup_epochs: 20
   diffusion:
     beta_schedule: cosine
     prediction_type: epsilon

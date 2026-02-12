@@ -179,6 +179,8 @@ def create_model(cfg: DictConfig) -> DiffusionModule:
     traj_consistency_weight = physics_cfg.get('trajectory_consistency', {}).get('weight', 0.1)
     coverage_weighted = physics_cfg.get('coverage_weighted', True)
     distance_decay_weight = physics_cfg.get('distance_decay', {}).get('weight', 0.01)
+    physics_warmup_epochs = physics_cfg.get('warmup_epochs', 0)
+    physics_rampup_epochs = physics_cfg.get('rampup_epochs', 10)
 
     # Coverage attention config
     coverage_attn_cfg = model_cfg.get('coverage_attention', {})
@@ -206,6 +208,8 @@ def create_model(cfg: DictConfig) -> DiffusionModule:
         trajectory_consistency_weight=traj_consistency_weight,
         coverage_weighted=coverage_weighted,
         distance_decay_weight=distance_decay_weight,
+        physics_warmup_epochs=physics_warmup_epochs,
+        physics_rampup_epochs=physics_rampup_epochs,
         # Coverage attention
         use_coverage_attention=use_coverage_attention,
         coverage_temperature=coverage_temperature,

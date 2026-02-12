@@ -100,12 +100,22 @@ echo ""
 # Auto-resume from checkpoint
 # ============================================================
 RESUME_ARG=""
-LAST_CKPT=$(find "experiments/${EXP_NAME}" -name "last.ckpt" -type f 2>/dev/null | head -1 || true)
-if [ -n "$LAST_CKPT" ]; then
-    echo "Resuming from checkpoint: $LAST_CKPT"
-    RESUME_ARG="+ckpt_path=${LAST_CKPT}"
+FRESH="${FRESH:-0}"
+if [ "$FRESH" = "1" ]; then
+    echo "FRESH=1: Starting fresh training (ignoring existing checkpoints)"
 else
-    echo "Starting fresh training (no checkpoint found)"
+    LAST_CKPT=$(find "experiments/${EXP_NAME}" -name "last.ckpt" -type f 2>/dev/null | head -1 || true)
+    if [ -n "$LAST_CKPT" ]; then
+        echo "Resuming from checkpoint: $LAST_CKPT"
+        RESUME_ARG="+ckpt_path=${LAST_CKPT}"
+        # Disable early stopping on resume: Lightning restores the old EarlyStopping
+        # state (patience, wait_count) from the checkpoint, which can cause immediate
+        # re-triggering if config changed. Rely on max_epochs instead.
+        RESUME_ARG="$RESUME_ARG training.early_stopping.enabled=false"
+        echo "  (early stopping disabled for resumed training — using max_epochs=$EPOCHS)"
+    else
+        echo "Starting fresh training (no checkpoint found)"
+    fi
 fi
 echo ""
 

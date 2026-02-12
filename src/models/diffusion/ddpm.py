@@ -618,14 +618,15 @@ class DDIMSampler:
 
         # DDIM sampling
         timesteps = list(reversed(self.ddim_timesteps))
+        timesteps_iter = timesteps  # keep plain list for subscript access
         if progress:
             try:
                 from tqdm import tqdm
-                timesteps = tqdm(timesteps, desc='DDIM Sampling')
+                timesteps_iter = tqdm(timesteps, desc='DDIM Sampling')
             except ImportError:
                 pass
 
-        for i, t in enumerate(timesteps):
+        for i, t in enumerate(timesteps_iter):
             t_batch = torch.full((batch_size,), t, device=device, dtype=torch.long)
 
             # Get model prediction

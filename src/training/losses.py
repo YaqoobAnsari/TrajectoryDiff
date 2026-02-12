@@ -166,11 +166,14 @@ class DistanceDecayLoss(nn.Module):
         self._cached_size = image_size
 
         # Pre-register coordinate grids as buffers (avoids re-creation every forward)
+        # Note: torch.meshgrid returns views sharing memory; must .clone() before
+        # registering as buffers, otherwise load_state_dict() fails with
+        # "more than one element of the written-to tensor refers to a single memory location"
         y_coords = torch.linspace(0, 1, image_size)
         x_coords = torch.linspace(0, 1, image_size)
         yy, xx = torch.meshgrid(y_coords, x_coords, indexing='ij')
-        self.register_buffer('yy', yy)
-        self.register_buffer('xx', xx)
+        self.register_buffer('yy', yy.clone())
+        self.register_buffer('xx', xx.clone())
 
     def _get_grid(self, H: int, W: int, device: torch.device) -> tuple:
         """Get coordinate grids, using cached buffers when sizes match."""

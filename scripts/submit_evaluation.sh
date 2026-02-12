@@ -141,13 +141,13 @@ fi
 
 python scripts/evaluate.py \
     experiment="$EXPERIMENT" \
-    checkpoint="$CHECKPOINT" \
+    "+checkpoint='${CHECKPOINT}'" \
     data.loader.batch_size=$BATCH_SIZE \
     data.loader.num_workers=$NUM_WORKERS \
     +visualize=true \
     +num_vis_samples=8 \
     $MAX_SAMPLES_ARG \
-    hydra.run.dir="$EVAL_DIR"
+    "hydra.run.dir=${EVAL_DIR}"
 
 echo ""
 echo "Model evaluation finished at $(date)"

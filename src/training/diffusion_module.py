@@ -57,6 +57,8 @@ class DiffusionModule(L.LightningModule):
         trajectory_consistency_weight: float = 0.1,
         coverage_weighted: bool = True,
         distance_decay_weight: float = 0.01,
+        physics_warmup_epochs: int = 0,
+        physics_rampup_epochs: int = 10,
         # Coverage attention configuration
         use_coverage_attention: bool = False,
         coverage_temperature: float = 1.0,
@@ -94,6 +96,8 @@ class DiffusionModule(L.LightningModule):
             trajectory_consistency_weight: Weight for trajectory consistency loss
             coverage_weighted: Use coverage-weighted diffusion loss
             distance_decay_weight: Weight for distance decay regularization
+            physics_warmup_epochs: Epochs of pure diffusion before physics losses activate
+            physics_rampup_epochs: Epochs to linearly ramp physics losses from 0 to full
             use_coverage_attention: Use CoverageAwareUNet
             coverage_temperature: Temperature for coverage attention modulation
             learning_rate: Initial learning rate
@@ -185,6 +189,29 @@ class DiffusionModule(L.LightningModule):
             ema_param.data.mul_(self.ema_decay).add_(
                 model_param.data, alpha=1 - self.ema_decay
             )
+
+    def _get_physics_warmup_factor(self) -> float:
+        """
+        Compute warmup scaling for physics losses.
+
+        Physics losses (trajectory consistency, distance decay) are computed on
+        pred_x0 which is garbage during early training. This linearly ramps them
+        in after the model has learned basic noise prediction.
+
+        Returns:
+            Float in [0, 1]: 0 = physics off, 1 = full physics
+        """
+        warmup = self.hparams.physics_warmup_epochs
+        rampup = self.hparams.physics_rampup_epochs
+        epoch = self.current_epoch
+
+        if warmup <= 0 and rampup <= 0:
+            return 1.0
+        if epoch < warmup:
+            return 0.0
+        if rampup <= 0:
+            return 1.0
+        return min(1.0, (epoch - warmup) / rampup)
 
     def forward(
         self,
@@ -315,11 +342,23 @@ class DiffusionModule(L.LightningModule):
                 pred_x0=pred_x0,
                 batch=batch,
             )
-            loss = losses['total']
+
+            # Apply warmup: physics losses (trajectory_consistency, distance_decay)
+            # are scaled from 0→1 over warmup period. Coverage-weighted diffusion
+            # loss is always active since it doesn't depend on pred_x0 quality.
+            warmup_factor = self._get_physics_warmup_factor()
+            total = losses['diffusion']
+            for key in ['trajectory_consistency', 'distance_decay']:
+                if key in losses:
+                    losses[key] = losses[key] * warmup_factor
+                    total = total + losses[key]
+            losses['total'] = total
+            loss = total
 
             # Log individual loss components
             for key, val in losses.items():
                 self.log(f'train/{key}', val, prog_bar=(key == 'total'))
+            self.log('train/physics_warmup', warmup_factor)
         else:
             # Standard diffusion loss
             if self.hparams.loss_type == 'mse':
@@ -376,12 +415,24 @@ class DiffusionModule(L.LightningModule):
                 tx_position=condition.get('tx_position'),
             )
 
-        # Compute target and loss
+        # Compute target and loss (always log plain diffusion MSE as val/loss
+        # for consistent comparison across experiments)
         target = self._compute_target(x_0, t, noise)
         loss = F.mse_loss(pred, target)
-
-        # Log metrics
         self.log('val/loss', loss, prog_bar=True, sync_dist=True)
+
+        # Also log physics loss components for trajectory_full monitoring
+        if self.use_physics_losses:
+            pred_x0 = self._predict_x0(x_t, t, pred)
+            with torch.no_grad():
+                physics_losses = self.physics_loss(
+                    noise_pred=pred,
+                    noise_target=target,
+                    pred_x0=pred_x0,
+                    batch=batch,
+                )
+            for key, val in physics_losses.items():
+                self.log(f'val/{key}', val, sync_dist=True)
 
         return {'val_loss': loss}
 

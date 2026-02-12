@@ -47,7 +47,7 @@ fi
 case "$MIG_PROFILE" in
     7g.141gb)
         GRES="gpu:nvidia_h200_7g.141gb:1"
-        TIME="24:00:00"
+        TIME="48:00:00"
         BATCH_SIZE=32
         GRAD_ACCUM=2
         NUM_WORKERS=12
@@ -56,7 +56,7 @@ case "$MIG_PROFILE" in
         ;;
     2g.35gb)
         GRES="gpu:nvidia_h200_2g.35gb:1"
-        TIME="36:00:00"
+        TIME="48:00:00"
         BATCH_SIZE=8
         GRAD_ACCUM=2
         NUM_WORKERS=8
@@ -103,11 +103,13 @@ echo "Memory: $MEM"
 echo "CPUs: $CPUS"
 echo "=============================================="
 
+FRESH="${FRESH:-0}"
+
 JOB_ID=$(sbatch \
     --parsable \
     --gres="${GRES}" \
     --time="${TIME}" \
-    --export=EXP_NAME="${EXP_NAME}",MIG_PROFILE="${MIG_PROFILE}",BATCH_SIZE="${BATCH_SIZE}",GRAD_ACCUM="${GRAD_ACCUM}",NUM_WORKERS="${NUM_WORKERS}" \
+    --export=EXP_NAME="${EXP_NAME}",MIG_PROFILE="${MIG_PROFILE}",BATCH_SIZE="${BATCH_SIZE}",GRAD_ACCUM="${GRAD_ACCUM}",NUM_WORKERS="${NUM_WORKERS}",FRESH="${FRESH}" \
     --mem="${MEM}" \
     --cpus-per-task="${CPUS}" \
     ${EXTRA_SBATCH_ARGS} \
