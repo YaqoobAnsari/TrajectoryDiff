@@ -216,8 +216,7 @@ def create_model(cfg: DictConfig) -> DiffusionModule:
         # Training config
         learning_rate=cfg.training.optimizer.lr,
         weight_decay=cfg.training.optimizer.weight_decay,
-        warmup_steps=cfg.training.scheduler.warmup_epochs * 100,  # Approximate
-        max_steps=cfg.training.max_steps or cfg.training.max_epochs * 1000,
+        warmup_epochs=cfg.training.scheduler.warmup_epochs,
         use_ema=True,
         ema_decay=0.9999,
         # Sampling config

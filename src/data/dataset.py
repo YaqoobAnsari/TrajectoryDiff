@@ -359,7 +359,8 @@ class UniformSamplingDataset(RadioMapDataset):
         antenna_positions = self._load_antenna_positions(map_id)
         tx_position = antenna_positions[tx_id]
 
-        # Uniform random sampling
+        # Uniform random sampling (unseeded for epoch-to-epoch variation,
+        # matching trajectory dataset behavior where each call generates new trajectories)
         sparse_rss, trajectory_mask = self._uniform_sample(radio_map, walkable_mask)
         coverage_density = self._compute_coverage_density(trajectory_mask)
 
@@ -391,14 +392,20 @@ class UniformSamplingDataset(RadioMapDataset):
     def _uniform_sample(
         self,
         radio_map: np.ndarray,
-        walkable_mask: np.ndarray
+        walkable_mask: np.ndarray,
+        seed: Optional[int] = None,
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Sample uniformly at random from walkable area."""
+        """Sample uniformly at random from walkable area.
+
+        Args:
+            seed: If None, uses fresh random state (epoch-to-epoch variation).
+                  If set, deterministic (for evaluation reproducibility).
+        """
         walkable_coords = np.argwhere(walkable_mask)
         n_samples = int(len(walkable_coords) * self.sampling_rate)
         n_samples = max(n_samples, 10)  # Minimum 10 samples
 
-        rng = np.random.default_rng()
+        rng = np.random.default_rng(seed=seed)
         idx = rng.choice(len(walkable_coords), size=min(n_samples, len(walkable_coords)), replace=False)
         selected = walkable_coords[idx]
 

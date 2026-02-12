@@ -163,7 +163,11 @@ class TrajectoryGenerator(ABC):
         if add_noise and self.rss_noise_std > 0:
             rss += self.rng.normal(0, self.rss_noise_std)
 
-        return float(rss)
+        # Clamp to valid PNG range [0, 255] to prevent out-of-range values
+        # after normalization to [-1, 1]
+        rss = float(np.clip(rss, 0, 255))
+
+        return rss
 
     def _add_position_noise(self, x: float, y: float) -> Tuple[float, float]:
         """Add Gaussian noise to position."""

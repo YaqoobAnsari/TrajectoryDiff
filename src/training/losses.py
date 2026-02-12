@@ -196,7 +196,7 @@ class DistanceDecayLoss(nn.Module):
         Args:
             pred_map: Predicted radio map
             tx_position: Normalized (0-1) transmitter position
-            building_map: Building map where 1 = wall, 0 = free space
+            building_map: Building map in [-1,1] where -1 = wall, +1 = walkable
 
         Returns:
             Scalar penalty for physics violations
@@ -219,8 +219,8 @@ class DistanceDecayLoss(nn.Module):
         near_tx = distance_map < 0.3
         far_from_tx = distance_map > 0.7
 
-        # Mask out walls (building_map in [0,1]: 0 = free space, 1 = wall)
-        free_space = building_map < 0.5
+        # Mask out walls (building_map in [-1,1]: -1 = wall, +1 = walkable)
+        free_space = building_map > 0.0
 
         # Compute mean RSS in near and far regions
         near_mask = near_tx & free_space

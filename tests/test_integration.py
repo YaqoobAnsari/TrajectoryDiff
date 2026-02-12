@@ -57,8 +57,7 @@ class TestDiffusionModuleStandard:
             prediction_type='epsilon',
             use_ema=False,
             learning_rate=1e-4,
-            warmup_steps=10,
-            max_steps=100,
+            warmup_epochs=1,
             ddim_steps=5,
         )
 
@@ -123,8 +122,7 @@ class TestDiffusionModuleWithPhysicsLosses:
             coverage_weighted=True,
             distance_decay_weight=0.01,
             learning_rate=1e-4,
-            warmup_steps=10,
-            max_steps=100,
+            warmup_epochs=1,
             ddim_steps=5,
         )
 
@@ -191,8 +189,7 @@ class TestDiffusionModuleWithCoverageAttention:
             use_coverage_attention=True,
             coverage_temperature=1.0,
             learning_rate=1e-4,
-            warmup_steps=10,
-            max_steps=100,
+            warmup_epochs=1,
             ddim_steps=5,
         )
 
@@ -239,8 +236,7 @@ class TestDiffusionModuleFullFeatures:
             use_coverage_attention=True,
             coverage_temperature=1.0,
             learning_rate=1e-4,
-            warmup_steps=10,
-            max_steps=100,
+            warmup_epochs=1,
             ddim_steps=5,
         )
 
@@ -324,8 +320,7 @@ class TestPredictionTypes:
             prediction_type=pred_type,
             use_ema=False,
             learning_rate=1e-4,
-            warmup_steps=10,
-            max_steps=100,
+            warmup_epochs=1,
             ddim_steps=5,
         )
         batch = make_mock_batch()
@@ -347,8 +342,7 @@ class TestPredictionTypes:
             trajectory_consistency_weight=0.1,
             distance_decay_weight=0.01,
             learning_rate=1e-4,
-            warmup_steps=10,
-            max_steps=100,
+            warmup_epochs=1,
             ddim_steps=5,
         )
         batch = make_mock_batch()
@@ -365,7 +359,7 @@ class TestAblationConfigurations:
         module = DiffusionModule(
             unet_size='small', image_size=IMG_SIZE, condition_channels=COND_CH,
             num_timesteps=100, use_ema=False, use_building_map=False,
-            learning_rate=1e-4, warmup_steps=10, max_steps=100, ddim_steps=5,
+            learning_rate=1e-4, warmup_epochs=1, ddim_steps=5,
         )
         batch = make_mock_batch()
         loss = module.training_step(batch, 0)
@@ -376,7 +370,7 @@ class TestAblationConfigurations:
         module = DiffusionModule(
             unet_size='small', image_size=IMG_SIZE, condition_channels=COND_CH,
             num_timesteps=100, use_ema=False, use_trajectory_mask=False,
-            learning_rate=1e-4, warmup_steps=10, max_steps=100, ddim_steps=5,
+            learning_rate=1e-4, warmup_epochs=1, ddim_steps=5,
         )
         batch = make_mock_batch()
         loss = module.training_step(batch, 0)
@@ -387,7 +381,7 @@ class TestAblationConfigurations:
         module = DiffusionModule(
             unet_size='small', image_size=IMG_SIZE, condition_channels=COND_CH,
             num_timesteps=100, use_ema=False, use_coverage_density=False,
-            learning_rate=1e-4, warmup_steps=10, max_steps=100, ddim_steps=5,
+            learning_rate=1e-4, warmup_epochs=1, ddim_steps=5,
         )
         batch = make_mock_batch()
         loss = module.training_step(batch, 0)
@@ -398,7 +392,7 @@ class TestAblationConfigurations:
         module = DiffusionModule(
             unet_size='small', image_size=IMG_SIZE, condition_channels=COND_CH,
             num_timesteps=100, use_ema=False, use_tx_position=False,
-            learning_rate=1e-4, warmup_steps=10, max_steps=100, ddim_steps=5,
+            learning_rate=1e-4, warmup_epochs=1, ddim_steps=5,
         )
         batch = make_mock_batch()
         loss = module.training_step(batch, 0)
@@ -412,7 +406,7 @@ class TestAblationConfigurations:
             use_building_map=False, use_trajectory_mask=False,
             use_coverage_density=False, use_tx_position=False,
             use_sparse_rss=True,
-            learning_rate=1e-4, warmup_steps=10, max_steps=100, ddim_steps=5,
+            learning_rate=1e-4, warmup_epochs=1, ddim_steps=5,
         )
         batch = make_mock_batch()
         loss = module.training_step(batch, 0)
@@ -428,7 +422,7 @@ class TestLossTypes:
         module = DiffusionModule(
             unet_size='small', image_size=IMG_SIZE, condition_channels=COND_CH,
             num_timesteps=100, loss_type=loss_type, use_ema=False,
-            learning_rate=1e-4, warmup_steps=10, max_steps=100, ddim_steps=5,
+            learning_rate=1e-4, warmup_epochs=1, ddim_steps=5,
         )
         batch = make_mock_batch()
         loss = module.training_step(batch, 0)
@@ -462,7 +456,7 @@ class TestMultiStepTraining:
         module = DiffusionModule(
             unet_size='small', image_size=IMG_SIZE, condition_channels=COND_CH,
             num_timesteps=100, use_ema=False,
-            learning_rate=1e-4, warmup_steps=10, max_steps=100, ddim_steps=5,
+            learning_rate=1e-4, warmup_epochs=1, ddim_steps=5,
         )
         optimizer = torch.optim.Adam(module.parameters(), lr=1e-4)
 
@@ -485,7 +479,7 @@ class TestMultiStepTraining:
             unet_size='small', image_size=IMG_SIZE, condition_channels=COND_CH,
             num_timesteps=100, use_ema=False,
             use_physics_losses=True, use_coverage_attention=True,
-            learning_rate=1e-4, warmup_steps=10, max_steps=100, ddim_steps=5,
+            learning_rate=1e-4, warmup_epochs=1, ddim_steps=5,
         )
         optimizer = torch.optim.Adam(module.parameters(), lr=1e-4)
 

@@ -64,7 +64,7 @@ class RadioMapDataModule(L.LightningDataModule):
             position_noise_std: Position noise in pixels
             rss_noise_std: RSS noise in PNG units
             coverage_sigma: Coverage density smoothing
-            normalize: Normalize maps to [0, 1]
+            normalize: Normalize signal data to [-1, 1] for diffusion
             batch_size: Batch size for dataloaders
             num_workers: Number of dataloader workers
             pin_memory: Pin memory for GPU transfer

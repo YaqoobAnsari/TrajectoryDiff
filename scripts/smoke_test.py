@@ -101,8 +101,7 @@ def main():
         coverage_temperature=1.0,
         learning_rate=1e-4,
         weight_decay=0.01,
-        warmup_steps=10,
-        max_steps=100,
+        warmup_epochs=1,
         use_ema=True,
         ema_decay=0.999,
         ddim_steps=10,  # Fewer DDIM steps

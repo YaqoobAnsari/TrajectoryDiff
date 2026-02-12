@@ -22,6 +22,13 @@ model:
     enabled: false  # Needs coverage_density, so disabled too
   physics:
     enabled: true
+    trajectory_consistency:
+      weight: 0.5
+    coverage_weighted: false  # Needs coverage_density, which is disabled in this ablation
+    distance_decay:
+      weight: 0.1
+    warmup_epochs: 30
+    rampup_epochs: 20
 
 training:
   max_epochs: 200

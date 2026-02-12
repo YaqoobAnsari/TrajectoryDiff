@@ -174,7 +174,7 @@ class TestDistanceDecayLoss:
         B, H, W = 2, 64, 64
         pred_map = torch.randn(B, 1, H, W)
         tx_position = torch.rand(B, 2)  # Random TX positions
-        building_map = torch.zeros(B, 1, H, W)  # No walls
+        building_map = torch.ones(B, 1, H, W)  # All walkable (+1 in [-1,1])
 
         loss = loss_fn(pred_map, tx_position, building_map)
 
@@ -197,7 +197,7 @@ class TestDistanceDecayLoss:
         distance = torch.sqrt((xx - 0.5) ** 2 + (yy - 0.5) ** 2)
         pred_map = (1.0 - distance).unsqueeze(0).unsqueeze(0)  # Decay with distance
 
-        building_map = torch.zeros(B, 1, H, W)
+        building_map = torch.ones(B, 1, H, W)  # All walkable (+1 in [-1,1])
 
         loss = loss_fn(pred_map, tx_position, building_map)
 
@@ -220,7 +220,7 @@ class TestDistanceDecayLoss:
         distance = torch.sqrt((xx - 0.5) ** 2 + (yy - 0.5) ** 2)
         pred_map = distance.unsqueeze(0).unsqueeze(0)  # INCREASE with distance
 
-        building_map = torch.zeros(B, 1, H, W)
+        building_map = torch.ones(B, 1, H, W)  # All walkable (+1 in [-1,1])
 
         loss = loss_fn(pred_map, tx_position, building_map)
 
@@ -236,7 +236,7 @@ class TestDistanceDecayLoss:
         tx_position = torch.tensor([[0.5, 0.5]])
 
         # Full wall coverage - should not be able to compute loss
-        building_map = torch.ones(B, 1, H, W)
+        building_map = -torch.ones(B, 1, H, W)  # All walls (-1 in [-1,1])
 
         loss = loss_fn(pred_map, tx_position, building_map)
 
@@ -333,7 +333,7 @@ class TestTrajectoryDiffLoss:
             'sparse_rss': torch.randn(B, 1, H, W),
             'trajectory_mask': torch.zeros(B, 1, H, W),
             'tx_position': torch.rand(B, 2),
-            'building_map': torch.zeros(B, 1, H, W),
+            'building_map': torch.ones(B, 1, H, W),  # All walkable (+1 in [-1,1])
         }
         batch['trajectory_mask'][:, :, 10:20, 10:20] = 1.0
 
@@ -401,7 +401,7 @@ class TestComputePhysicsLosses:
             sparse_rss=sparse_rss,
             trajectory_mask=trajectory_mask,
             tx_position=torch.rand(B, 2),
-            building_map=torch.zeros(B, 1, H, W),
+            building_map=torch.ones(B, 1, H, W),  # All walkable (+1 in [-1,1])
             trajectory_weight=0.1,
             distance_weight=0.01,
         )

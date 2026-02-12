@@ -58,24 +58,26 @@ def compute_psnr(pred: torch.Tensor, target: torch.Tensor, max_val: float = 2.0)
 def compute_ssim(
     pred: torch.Tensor,
     target: torch.Tensor,
-    window_size: int = 11,
-    C1: float = 0.01 ** 2,
-    C2: float = 0.03 ** 2,
+    data_range: float = 2.0,
 ) -> torch.Tensor:
-    """Compute Structural Similarity Index (simplified version)."""
-    # Simple SSIM computation
-    mu_pred = pred.mean(dim=(2, 3), keepdim=True)
-    mu_target = target.mean(dim=(2, 3), keepdim=True)
+    """Compute SSIM using skimage (proper sliding-window implementation).
 
-    sigma_pred = ((pred - mu_pred) ** 2).mean(dim=(2, 3), keepdim=True)
-    sigma_target = ((target - mu_target) ** 2).mean(dim=(2, 3), keepdim=True)
-    sigma_pred_target = ((pred - mu_pred) * (target - mu_target)).mean(dim=(2, 3), keepdim=True)
+    Args:
+        pred: Predicted tensor (B, 1, H, W) in [-1, 1]
+        target: Target tensor (B, 1, H, W) in [-1, 1]
+        data_range: Value range of the data (2.0 for [-1, 1])
 
-    numerator = (2 * mu_pred * mu_target + C1) * (2 * sigma_pred_target + C2)
-    denominator = (mu_pred ** 2 + mu_target ** 2 + C1) * (sigma_pred + sigma_target + C2)
+    Returns:
+        Per-sample SSIM values (B,)
+    """
+    from evaluation.metrics import ssim as ssim_metric
 
-    ssim = numerator / denominator
-    return ssim.mean(dim=(1, 2, 3))
+    batch_ssim = []
+    for i in range(pred.shape[0]):
+        p = pred[i].squeeze().cpu().numpy()
+        t = target[i].squeeze().cpu().numpy()
+        batch_ssim.append(ssim_metric(p, t, data_range=data_range))
+    return torch.tensor(batch_ssim)
 
 
 def compute_trajectory_rmse(
@@ -197,8 +199,8 @@ def evaluate_model(
         # Compute metrics in dBm scale
         all_rmse.append(compute_rmse(samples_dbm, gt_dbm).cpu())
         all_mae.append(compute_mae(samples_dbm, gt_dbm).cpu())
-        all_psnr.append(compute_psnr(samples, ground_truth).cpu())  # PSNR in normalized space
-        all_ssim.append(compute_ssim(samples, ground_truth).cpu())  # SSIM in normalized space
+        all_psnr.append(compute_psnr(samples_dbm, gt_dbm, max_val=139.0).cpu())  # dBm range [-186, -47]
+        all_ssim.append(compute_ssim(samples, ground_truth, data_range=2.0).cpu())  # [-1,1] range
 
         # Trajectory-aware metrics (dBm scale)
         if 'trajectory_mask' in batch:
@@ -406,7 +408,7 @@ def main(cfg: DictConfig):
     print(f"\nReconstruction Metrics (dBm scale):")
     print(f"  RMSE:  {metrics['rmse_dbm']:.2f} +/- {metrics['rmse_dbm_std']:.2f} dBm")
     print(f"  MAE:   {metrics['mae_dbm']:.2f} +/- {metrics['mae_dbm_std']:.2f} dBm")
-    print(f"  PSNR:  {metrics['psnr']:.2f} +/- {metrics['psnr_std']:.2f} dB")
+    print(f"  PSNR:  {metrics['psnr']:.2f} +/- {metrics['psnr_std']:.2f} dB (dBm scale, range=139)")
     print(f"  SSIM:  {metrics['ssim']:.4f} +/- {metrics['ssim_std']:.4f}")
 
     if 'trajectory_rmse_dbm' in metrics:

@@ -61,11 +61,13 @@ class CoverageAwareUNet(UNet):
                         if isinstance(layer, AttentionBlock):
                             block[j] = CoverageAwareAttentionBlock(
                                 channels=layer.channels,
+                                num_heads=layer.num_heads,
                                 coverage_temperature=self.coverage_temperature,
                             )
                 elif isinstance(block, AttentionBlock):
                     module_list[i] = CoverageAwareAttentionBlock(
                         channels=block.channels,
+                        num_heads=block.num_heads,
                         coverage_temperature=self.coverage_temperature,
                     )
 

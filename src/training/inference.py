@@ -198,6 +198,7 @@ class DiffusionInference:
             'building_map': [],
             'sparse_rss': [],
             'trajectory_mask': [],
+            'coverage_density': [],
             'tx_position': [],
         }
 

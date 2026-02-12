@@ -457,10 +457,10 @@ class TrainingHealthCheck(Callback):
         if loss is None:
             return
 
-        # Record initial loss
-        if self._initial_loss is None and trainer.global_step == 0:
+        # Record initial loss (also captures on resume when global_step > 0)
+        if self._initial_loss is None:
             self._initial_loss = loss
-            print(f"[HealthCheck] Initial loss: {loss:.6f}")
+            print(f"[HealthCheck] Initial loss: {loss:.6f} (step {trainer.global_step})")
 
         # Check NaN/Inf
         if not torch.isfinite(torch.tensor(loss)):

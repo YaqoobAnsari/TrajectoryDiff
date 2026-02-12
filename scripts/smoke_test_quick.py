@@ -52,7 +52,7 @@ model = DiffusionModule(
     loss_type="mse", use_building_map=True, use_sparse_rss=True,
     use_trajectory_mask=True, use_coverage_density=True, use_tx_position=True,
     use_physics_losses=False, use_coverage_attention=False,
-    learning_rate=1e-4, weight_decay=0.01, warmup_steps=10, max_steps=100,
+    learning_rate=1e-4, weight_decay=0.01, warmup_epochs=1,
     use_ema=True, ema_decay=0.999, ddim_steps=10,
 )
 total_p = sum(p.numel() for p in model.parameters())
@@ -94,7 +94,7 @@ model_full = DiffusionModule(
     use_physics_losses=True, trajectory_consistency_weight=0.1,
     coverage_weighted=True, distance_decay_weight=0.01,
     use_coverage_attention=True, coverage_temperature=1.0,
-    learning_rate=1e-4, weight_decay=0.01, warmup_steps=10, max_steps=100,
+    learning_rate=1e-4, weight_decay=0.01, warmup_epochs=1,
     use_ema=True, ema_decay=0.999, ddim_steps=10,
 )
 model_full.train()

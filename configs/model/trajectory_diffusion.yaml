@@ -43,11 +43,13 @@ coverage_attention:
 physics:
   enabled: false  # Set true to add physics losses to training
   trajectory_consistency:
-    weight: 0.1
+    weight: 0.5
     smoothness_weight: 0.1
   coverage_weighted: true  # Weight diffusion loss by coverage density
   distance_decay:
-    weight: 0.01
+    weight: 0.1
+  warmup_epochs: 30
+  rampup_epochs: 20
 
 # Uncertainty estimation (at inference time)
 uncertainty:

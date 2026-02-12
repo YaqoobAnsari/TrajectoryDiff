@@ -27,21 +27,20 @@ class TestDiffusionModule:
             num_timesteps=100,
             beta_schedule='linear',
             learning_rate=1e-4,
-            warmup_steps=10,
-            max_steps=100,
+            warmup_epochs=1,
             use_ema=False,  # Disable EMA for faster tests
         )
 
     @pytest.fixture
     def batch(self):
-        """Create a sample batch."""
+        """Create a sample batch with correct data ranges."""
         return {
-            'radio_map': torch.randn(2, 1, 64, 64),
-            'building_map': torch.randn(2, 1, 64, 64),
-            'sparse_rss': torch.randn(2, 1, 64, 64),
-            'trajectory_mask': torch.randn(2, 1, 64, 64),
-            'coverage_density': torch.randn(2, 1, 64, 64),
-            'tx_position': torch.tensor([[32.0, 32.0], [48.0, 16.0]]),
+            'radio_map': torch.randn(2, 1, 64, 64).clamp(-1, 1),
+            'building_map': torch.randint(0, 2, (2, 1, 64, 64)).float() * 2 - 1,  # {-1, +1}
+            'sparse_rss': torch.randn(2, 1, 64, 64).clamp(-1, 1),
+            'trajectory_mask': torch.randint(0, 2, (2, 1, 64, 64)).float(),  # {0, 1}
+            'coverage_density': torch.rand(2, 1, 64, 64),  # [0, 1]
+            'tx_position': torch.rand(2, 2),  # [0, 1] normalized
         }
 
     def test_module_init(self, module):
@@ -162,11 +161,11 @@ class TestSampling:
     def test_sample_ddim(self, module):
         """DDIM sampling should produce correct shape."""
         condition = {
-            'building_map': torch.randn(2, 1, 64, 64),
-            'sparse_rss': torch.randn(2, 1, 64, 64),
-            'trajectory_mask': torch.randn(2, 1, 64, 64),
-            'coverage_density': torch.randn(2, 1, 64, 64),
-            'tx_position': torch.tensor([[32.0, 32.0], [48.0, 16.0]]),
+            'building_map': torch.randint(0, 2, (2, 1, 64, 64)).float() * 2 - 1,
+            'sparse_rss': torch.randn(2, 1, 64, 64).clamp(-1, 1),
+            'trajectory_mask': torch.randint(0, 2, (2, 1, 64, 64)).float(),
+            'coverage_density': torch.rand(2, 1, 64, 64),
+            'tx_position': torch.rand(2, 2),
         }
 
         samples = module.sample(condition, use_ddim=True, progress=False)

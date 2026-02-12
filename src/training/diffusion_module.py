@@ -5,6 +5,7 @@ Handles training, validation, and inference for the diffusion model.
 Includes optional physics-informed losses and coverage-aware attention.
 """
 
+import math
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
@@ -14,8 +15,9 @@ import lightning as L
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 
+import os
 import sys
-sys.path.insert(0, 'src')
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from models.diffusion import GaussianDiffusion, DDIMSampler
 from models.encoders import TrajectoryConditionedUNet
@@ -54,19 +56,18 @@ class DiffusionModule(L.LightningModule):
         use_tx_position: bool = True,
         # Physics loss configuration
         use_physics_losses: bool = False,
-        trajectory_consistency_weight: float = 0.1,
+        trajectory_consistency_weight: float = 0.5,
         coverage_weighted: bool = True,
-        distance_decay_weight: float = 0.01,
-        physics_warmup_epochs: int = 0,
-        physics_rampup_epochs: int = 10,
+        distance_decay_weight: float = 0.1,
+        physics_warmup_epochs: int = 30,
+        physics_rampup_epochs: int = 20,
         # Coverage attention configuration
         use_coverage_attention: bool = False,
         coverage_temperature: float = 1.0,
         # Training configuration
         learning_rate: float = 1e-4,
         weight_decay: float = 0.01,
-        warmup_steps: int = 1000,
-        max_steps: int = 100000,
+        warmup_epochs: int = 5,
         ema_decay: float = 0.9999,
         use_ema: bool = True,
         # Sampling configuration
@@ -102,8 +103,7 @@ class DiffusionModule(L.LightningModule):
             coverage_temperature: Temperature for coverage attention modulation
             learning_rate: Initial learning rate
             weight_decay: AdamW weight decay
-            warmup_steps: Linear warmup steps
-            max_steps: Maximum training steps (for scheduler)
+            warmup_epochs: Number of warmup epochs (computed to steps dynamically)
             ema_decay: EMA decay rate
             use_ema: Whether to use EMA
             sample_every_n_epochs: Generate samples every N epochs
@@ -127,11 +127,9 @@ class DiffusionModule(L.LightningModule):
             coverage_temperature=coverage_temperature,
         )
 
-        # Enable gradient checkpointing for memory savings (trades compute for memory)
+        # Gradient checkpointing not yet wired up in UNet forward pass
         if use_gradient_checkpointing:
-            if hasattr(self.model, 'unet'):
-                self.model.unet.gradient_checkpointing = True
-            self.model.gradient_checkpointing_enable = True
+            print("[WARNING] use_gradient_checkpointing=True but UNet does not implement it. Ignored.")
 
         # Create diffusion process
         self.diffusion = GaussianDiffusion(
@@ -347,18 +345,26 @@ class DiffusionModule(L.LightningModule):
             # are scaled from 0→1 over warmup period. Coverage-weighted diffusion
             # loss is always active since it doesn't depend on pred_x0 quality.
             warmup_factor = self._get_physics_warmup_factor()
+
+            # SNR-based timestep weighting: at high timesteps, pred_x0 is garbage.
+            # Weight physics losses by alphas_cumprod[t] (≈1 at t=0, ≈0 at t=T).
+            snr_weight = self.diffusion.alphas_cumprod[t].mean()
+
             total = losses['diffusion']
             for key in ['trajectory_consistency', 'distance_decay']:
                 if key in losses:
-                    losses[key] = losses[key] * warmup_factor
+                    # Log raw (unscaled) physics loss for interpretability
+                    self.log(f'train/{key}_raw', losses[key])
+                    losses[key] = losses[key] * warmup_factor * snr_weight
                     total = total + losses[key]
             losses['total'] = total
             loss = total
 
-            # Log individual loss components
+            # Log individual loss components (scaled by warmup + SNR)
             for key, val in losses.items():
                 self.log(f'train/{key}', val, prog_bar=(key == 'total'))
             self.log('train/physics_warmup', warmup_factor)
+            self.log('train/physics_snr_weight', snr_weight)
         else:
             # Standard diffusion loss
             if self.hparams.loss_type == 'mse':
@@ -369,13 +375,15 @@ class DiffusionModule(L.LightningModule):
                 loss = F.smooth_l1_loss(pred, target)
             self.log('train/loss', loss, prog_bar=True)
 
-        # Update EMA
-        if self.use_ema:
-            self._update_ema()
-
         self.log('train/timestep_mean', t.float().mean())
 
         return loss
+
+    def optimizer_step(self, epoch, batch_idx, optimizer, optimizer_closure=None):
+        """Override optimizer_step to update EMA after weights are updated."""
+        super().optimizer_step(epoch, batch_idx, optimizer, optimizer_closure)
+        if self.use_ema:
+            self._update_ema()
 
     def validation_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> Dict[str, torch.Tensor]:
         """
@@ -391,14 +399,20 @@ class DiffusionModule(L.LightningModule):
         x_0 = batch['radio_map']
         B = x_0.shape[0]
 
-        # Sample timesteps for validation
-        t = self.diffusion.sample_timesteps(B, x_0.device)
+        # Use deterministic timesteps and noise for validation (seeded by batch_idx)
+        # so val/loss is consistent across epochs for reliable model selection.
+        # Generate on CPU for portability (CUDA generators require PyTorch 2.0+).
+        val_rng = torch.Generator(device='cpu')
+        val_rng.manual_seed(42 + batch_idx)
+        t = torch.randint(0, self.diffusion.num_timesteps, (B,),
+                          generator=val_rng).to(x_0.device)
 
         # Extract conditioning
         condition = self._extract_condition(batch)
 
         # Forward diffusion
-        noise = torch.randn_like(x_0)
+        noise = torch.randn(x_0.shape, generator=val_rng).to(
+            device=x_0.device, dtype=x_0.dtype)
         x_t = self.diffusion.q_sample(x_0, t, noise=noise)
 
         # Use EMA model for validation if available
@@ -468,24 +482,49 @@ class DiffusionModule(L.LightningModule):
             betas=(0.9, 0.999),
         )
 
+        # Compute actual step counts from trainer
+        if self.trainer is not None and hasattr(self.trainer, 'estimated_stepping_batches'):
+            total_steps = self.trainer.estimated_stepping_batches
+            max_epochs = self.trainer.max_epochs or 200
+            # estimated_stepping_batches returns inf when max_epochs=-1 (max_steps only)
+            if not math.isfinite(total_steps) or max_epochs < 1:
+                total_steps = 100000
+                steps_per_epoch = 500
+            else:
+                steps_per_epoch = total_steps // max(1, max_epochs)
+            warmup_steps = self.hparams.warmup_epochs * steps_per_epoch
+        else:
+            # Fallback for unit tests without a trainer
+            total_steps = 100000
+            warmup_steps = 1000
+
+        print(
+            f"[LR Schedule] total_steps={total_steps}, "
+            f"warmup_steps={warmup_steps} "
+            f"({self.hparams.warmup_epochs} epochs)"
+        )
+
         # Learning rate scheduler with warmup
+        # Guard: warmup_steps=0 causes issues with LinearLR(total_iters=0)
+        warmup_steps = max(1, warmup_steps) if self.hparams.warmup_epochs > 0 else 1
+
         warmup_scheduler = LinearLR(
             optimizer,
-            start_factor=0.01,
+            start_factor=0.01 if self.hparams.warmup_epochs > 0 else 1.0,
             end_factor=1.0,
-            total_iters=self.hparams.warmup_steps,
+            total_iters=warmup_steps,
         )
 
         cosine_scheduler = CosineAnnealingLR(
             optimizer,
-            T_max=self.hparams.max_steps - self.hparams.warmup_steps,
+            T_max=max(1, int(total_steps) - warmup_steps),
             eta_min=self.hparams.learning_rate * 0.01,
         )
 
         scheduler = SequentialLR(
             optimizer,
             schedulers=[warmup_scheduler, cosine_scheduler],
-            milestones=[self.hparams.warmup_steps],
+            milestones=[warmup_steps],
         )
 
         return {
@@ -572,7 +611,8 @@ class DiffusionModule(L.LightningModule):
                 progress=progress,
             )
 
-        return samples
+        # Clamp to valid data range [-1, 1] to prevent nonsensical dBm after denormalization
+        return samples.clamp(-1, 1)
 
     def on_save_checkpoint(self, checkpoint: Dict[str, Any]):
         """Save EMA model in checkpoint."""
@@ -726,21 +766,21 @@ def get_diffusion_module(
             num_timesteps=1000,
             beta_schedule='cosine',
             learning_rate=1e-4,
-            warmup_steps=1000,
+            warmup_epochs=5,
         ),
         'fast': dict(
             unet_size='small',
             num_timesteps=500,
             beta_schedule='linear',
             learning_rate=2e-4,
-            warmup_steps=500,
+            warmup_epochs=3,
         ),
         'quality': dict(
             unet_size='large',
             num_timesteps=1000,
             beta_schedule='cosine',
             learning_rate=5e-5,
-            warmup_steps=2000,
+            warmup_epochs=10,
         ),
     }
 
