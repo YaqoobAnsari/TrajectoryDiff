@@ -48,6 +48,7 @@ class DiffusionModule(L.LightningModule):
         beta_schedule: str = 'cosine',
         prediction_type: str = 'epsilon',
         loss_type: str = 'mse',
+        min_snr_gamma: float = 5.0,
         # Conditioning configuration
         use_building_map: bool = True,
         use_sparse_rss: bool = True,
@@ -137,6 +138,7 @@ class DiffusionModule(L.LightningModule):
             beta_schedule=beta_schedule,
             prediction_type=prediction_type,
             loss_type=loss_type,
+            min_snr_gamma=min_snr_gamma,
         )
 
         # Physics-informed losses (optional)
@@ -289,6 +291,42 @@ class DiffusionModule(L.LightningModule):
             pred_x0 = sqrt_alpha * x_t - sqrt_one_minus * pred
         return pred_x0.clamp(-1, 1)
 
+    def _predict_x0_for_physics(
+        self,
+        x_t: torch.Tensor,
+        t: torch.Tensor,
+        pred: torch.Tensor,
+    ) -> torch.Tensor:
+        """Recover predicted x0 with detached timestep-dependent scaling.
+
+        Same math as _predict_x0 but detaches sqrt_recip_alphas_cumprod and
+        sqrt_recipm1_alphas_cumprod so their ~10000x magnification at high t
+        does not amplify gradients through the physics loss path. The model
+        still gets gradients from the physics loss w.r.t. its output (pred),
+        just not multiplied by the huge rescaling factors.
+        """
+        if self.hparams.prediction_type == 'epsilon':
+            # x0 = sqrt_recip * x_t - sqrt_recipm1 * eps
+            # Detach the scaling coefficients to prevent gradient amplification
+            sqrt_recip = self.diffusion._extract(
+                self.diffusion.sqrt_recip_alphas_cumprod, t, x_t.shape
+            ).detach()
+            sqrt_recipm1 = self.diffusion._extract(
+                self.diffusion.sqrt_recipm1_alphas_cumprod, t, x_t.shape
+            ).detach()
+            pred_x0 = sqrt_recip * x_t - sqrt_recipm1 * pred
+        elif self.hparams.prediction_type == 'x0':
+            pred_x0 = pred
+        else:  # 'v'
+            sqrt_alpha = self.diffusion._extract(
+                self.diffusion.sqrt_alphas_cumprod, t, x_t.shape
+            ).detach()
+            sqrt_one_minus = self.diffusion._extract(
+                self.diffusion.sqrt_one_minus_alphas_cumprod, t, x_t.shape
+            ).detach()
+            pred_x0 = sqrt_alpha * x_t - sqrt_one_minus * pred
+        return pred_x0.clamp(-1, 1)
+
     def training_step(self, batch: Dict[str, torch.Tensor], batch_idx: int) -> Optional[torch.Tensor]:
         """
         Training step with OOM recovery.
@@ -330,8 +368,9 @@ class DiffusionModule(L.LightningModule):
         target = self._compute_target(x_0, t, noise)
 
         if self.use_physics_losses:
-            # Recover pred_x0 for physics losses
-            pred_x0 = self._predict_x0(x_t, t, pred)
+            # Recover pred_x0 for physics losses using detached scaling
+            # to prevent ~10000x gradient amplification at high timesteps
+            pred_x0 = self._predict_x0_for_physics(x_t, t, pred)
 
             # Combined loss with physics components
             losses = self.physics_loss(
@@ -346,17 +385,38 @@ class DiffusionModule(L.LightningModule):
             # loss is always active since it doesn't depend on pred_x0 quality.
             warmup_factor = self._get_physics_warmup_factor()
 
-            # SNR-based timestep weighting: at high timesteps, pred_x0 is garbage.
-            # Weight physics losses by alphas_cumprod[t] (≈1 at t=0, ≈0 at t=T).
-            snr_weight = self.diffusion.alphas_cumprod[t].mean()
+            # Per-sample SNR weighting: at high timesteps, pred_x0 is garbage.
+            # Weight physics losses by alphas_cumprod[t] per sample, then average.
+            alpha_t = self.diffusion.alphas_cumprod[t]  # (B,)
 
             total = losses['diffusion']
             for key in ['trajectory_consistency', 'distance_decay']:
                 if key in losses:
                     # Log raw (unscaled) physics loss for interpretability
                     self.log(f'train/{key}_raw', losses[key])
-                    losses[key] = losses[key] * warmup_factor * snr_weight
-                    total = total + losses[key]
+
+                    # Get per-sample physics losses for SNR weighting
+                    if key == 'trajectory_consistency' and hasattr(self.physics_loss, 'trajectory_loss'):
+                        per_sample = self.physics_loss.trajectory_loss(
+                            pred_x0, batch['sparse_rss'], batch['trajectory_mask'],
+                            reduction='none',
+                        ) * self.physics_loss.trajectory_consistency_weight
+                    elif key == 'distance_decay' and hasattr(self.physics_loss, 'distance_loss'):
+                        per_sample = self.physics_loss.distance_loss(
+                            pred_x0, batch['tx_position'], batch['building_map'],
+                            reduction='none',
+                        ) * self.physics_loss.distance_decay_weight
+                    else:
+                        # Fallback: use scalar loss with batch-mean SNR
+                        losses[key] = losses[key] * warmup_factor * alpha_t.mean()
+                        total = total + losses[key]
+                        continue
+
+                    # Per-sample SNR weighting: multiply each sample's loss
+                    # by its alphas_cumprod[t], then batch-average
+                    weighted = (per_sample * alpha_t * warmup_factor).mean()
+                    losses[key] = weighted
+                    total = total + weighted
             losses['total'] = total
             loss = total
 
@@ -364,7 +424,7 @@ class DiffusionModule(L.LightningModule):
             for key, val in losses.items():
                 self.log(f'train/{key}', val, prog_bar=(key == 'total'))
             self.log('train/physics_warmup', warmup_factor)
-            self.log('train/physics_snr_weight', snr_weight)
+            self.log('train/physics_snr_weight', alpha_t.mean())
         else:
             # Standard diffusion loss
             if self.hparams.loss_type == 'mse':
@@ -483,9 +543,15 @@ class DiffusionModule(L.LightningModule):
         )
 
         # Compute actual step counts from trainer
-        if self.trainer is not None and hasattr(self.trainer, 'estimated_stepping_batches'):
-            total_steps = self.trainer.estimated_stepping_batches
-            max_epochs = self.trainer.max_epochs or 200
+        # Note: self.trainer raises RuntimeError when not attached (Lightning 2.x),
+        # so we must use try/except rather than a None check.
+        try:
+            _trainer = self.trainer
+        except RuntimeError:
+            _trainer = None
+        if _trainer is not None and hasattr(_trainer, 'estimated_stepping_batches'):
+            total_steps = _trainer.estimated_stepping_batches
+            max_epochs = _trainer.max_epochs or 200
             # estimated_stepping_batches returns inf when max_epochs=-1 (max_steps only)
             if not math.isfinite(total_steps) or max_epochs < 1:
                 total_steps = 100000

@@ -1,10 +1,14 @@
 # @package _global_
 # Cross-Evaluation: Train on trajectory sampling, evaluate on uniform
 # Tests how trajectory-trained model generalizes to uniform coverage patterns
+#
+# NOTE: Cross-evaluation is performed post-hoc via evaluate.py with a different
+# test loader configuration. Set data.sampling.strategy=uniform at eval time.
 
 experiment:
   name: cross_eval_traj_to_uniform
   tags: [cross_eval, train_trajectory, eval_uniform]
+  eval_sampling_strategy: uniform  # Training uses trajectory, evaluation uses uniform
 
 data:
   sampling:

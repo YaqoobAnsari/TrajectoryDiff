@@ -33,9 +33,11 @@ import hydra
 import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
+from scipy import stats
 from tqdm import tqdm
 
 from data import RadioMapDataModule
+from evaluation.metrics import compute_sample_diversity, compute_masked_ssim, compute_masked_psnr
 from training import DiffusionModule, DiffusionInference, denormalize_radio_map
 
 
@@ -78,6 +80,52 @@ def compute_ssim(
         t = target[i].squeeze().cpu().numpy()
         batch_ssim.append(ssim_metric(p, t, data_range=data_range))
     return torch.tensor(batch_ssim)
+
+
+def compute_significance(
+    metrics_a: List[float],
+    metrics_b: List[float],
+    n_bootstrap: int = 1000,
+) -> Dict[str, float]:
+    """
+    Compute statistical significance between two sets of metrics (C4).
+
+    Uses Wilcoxon signed-rank test for paired samples and bootstrap for 95% CI.
+
+    Args:
+        metrics_a: Per-sample metrics from method A
+        metrics_b: Per-sample metrics from method B (paired with A)
+        n_bootstrap: Number of bootstrap resamples
+
+    Returns:
+        Dict with p_value, ci_lower, ci_upper, mean_diff
+    """
+    metrics_a = np.array(metrics_a)
+    metrics_b = np.array(metrics_b)
+
+    # Wilcoxon signed-rank test (paired)
+    stat, p_value = stats.wilcoxon(metrics_a, metrics_b, alternative='two-sided')
+
+    # Bootstrap 95% CI for mean difference
+    diffs = metrics_a - metrics_b
+    mean_diff = float(np.mean(diffs))
+
+    bootstrap_means = []
+    rng = np.random.RandomState(42)
+    for _ in range(n_bootstrap):
+        indices = rng.choice(len(diffs), size=len(diffs), replace=True)
+        bootstrap_means.append(np.mean(diffs[indices]))
+
+    ci_lower = float(np.percentile(bootstrap_means, 2.5))
+    ci_upper = float(np.percentile(bootstrap_means, 97.5))
+
+    return {
+        'p_value': float(p_value),
+        'mean_diff': mean_diff,
+        'ci_lower': ci_lower,
+        'ci_upper': ci_upper,
+        'significant': p_value < 0.05,
+    }
 
 
 def compute_trajectory_rmse(
@@ -133,6 +181,8 @@ def evaluate_model(
     use_ddim: bool = True,
     compute_uncertainty: bool = False,
     num_uncertainty_samples: int = 10,
+    compute_diversity: bool = False,
+    num_diversity_samples: int = 5,
 ) -> Dict[str, float]:
     """
     Evaluate model on dataloader.
@@ -156,6 +206,12 @@ def evaluate_model(
     all_traj_rmse = []
     all_blind_rmse = []
     all_uncertainty = []
+    all_diversity = []  # C6
+    # M10: Per-region metrics
+    all_ssim_observed = []
+    all_ssim_unobserved = []
+    all_psnr_observed = []
+    all_psnr_unobserved = []
 
     total_samples = 0
 
@@ -180,15 +236,25 @@ def evaluate_model(
         }
         condition = {k: v for k, v in condition.items() if v is not None}
 
-        # Generate samples
-        if compute_uncertainty:
+        # Generate samples (C6: with diversity option)
+        if compute_uncertainty or compute_diversity:
+            num_gen_samples = max(num_uncertainty_samples, num_diversity_samples)
             samples_list = []
-            for _ in range(num_uncertainty_samples):
+            for _ in range(num_gen_samples):
                 s = inference.sample(condition, use_ddim=use_ddim, progress=False)
                 samples_list.append(s)
-            samples = torch.stack(samples_list, dim=0).mean(dim=0)
-            uncertainty = torch.stack(samples_list, dim=0).std(dim=0)
-            all_uncertainty.append(uncertainty.mean(dim=(1, 2, 3)).cpu())
+            samples_tensor = torch.stack(samples_list, dim=0)  # (K, B, 1, H, W)
+            samples = samples_tensor.mean(dim=0)  # Mean prediction
+
+            if compute_uncertainty:
+                uncertainty = samples_tensor.std(dim=0)
+                all_uncertainty.append(uncertainty.mean(dim=(1, 2, 3)).cpu())
+
+            # C6: Compute diversity
+            if compute_diversity:
+                for b in range(samples_tensor.shape[1]):  # For each batch item
+                    diversity = compute_sample_diversity(samples_tensor[:, b])
+                    all_diversity.append(diversity['mean_std'])
         else:
             samples = inference.sample(condition, use_ddim=use_ddim, progress=False)
 
@@ -196,11 +262,11 @@ def evaluate_model(
         samples_dbm = denormalize_radio_map(samples)
         gt_dbm = denormalize_radio_map(ground_truth)
 
-        # Compute metrics in dBm scale
+        # Compute metrics in dBm scale (C7: both PSNR and SSIM on same scale)
         all_rmse.append(compute_rmse(samples_dbm, gt_dbm).cpu())
         all_mae.append(compute_mae(samples_dbm, gt_dbm).cpu())
         all_psnr.append(compute_psnr(samples_dbm, gt_dbm, max_val=139.0).cpu())  # dBm range [-186, -47]
-        all_ssim.append(compute_ssim(samples, ground_truth, data_range=2.0).cpu())  # [-1,1] range
+        all_ssim.append(compute_ssim(samples_dbm, gt_dbm, data_range=139.0).cpu())  # dBm scale
 
         # Trajectory-aware metrics (dBm scale)
         if 'trajectory_mask' in batch:
@@ -208,27 +274,74 @@ def evaluate_model(
             all_traj_rmse.append(compute_trajectory_rmse(samples_dbm, gt_dbm, traj_mask).cpu())
             all_blind_rmse.append(compute_blind_spot_rmse(samples_dbm, gt_dbm, traj_mask).cpu())
 
+            # M10: Per-region SSIM/PSNR
+            for b in range(samples_dbm.shape[0]):
+                mask = traj_mask[b, 0].cpu().numpy()
+                pred_np = samples_dbm[b, 0].cpu().numpy()
+                gt_np = gt_dbm[b, 0].cpu().numpy()
+
+                # Observed region
+                observed_mask = mask > 0.5
+                if observed_mask.any():
+                    all_ssim_observed.append(compute_masked_ssim(pred_np, gt_np, observed_mask, data_range=139.0))
+                    all_psnr_observed.append(compute_masked_psnr(pred_np, gt_np, observed_mask, data_range=139.0))
+
+                # Unobserved region
+                unobserved_mask = mask <= 0.5
+                if unobserved_mask.any():
+                    all_ssim_unobserved.append(compute_masked_ssim(pred_np, gt_np, unobserved_mask, data_range=139.0))
+                    all_psnr_unobserved.append(compute_masked_psnr(pred_np, gt_np, unobserved_mask, data_range=139.0))
+
         total_samples += ground_truth.shape[0]
 
     # Aggregate metrics
+    rmse_values = torch.cat(all_rmse).cpu().numpy()
+    mae_values = torch.cat(all_mae).cpu().numpy()
+    psnr_values = torch.cat(all_psnr).cpu().numpy()
+    ssim_values = torch.cat(all_ssim).cpu().numpy()
+
     metrics = {
-        'rmse_dbm': torch.cat(all_rmse).mean().item(),
-        'rmse_dbm_std': torch.cat(all_rmse).std().item(),
-        'mae_dbm': torch.cat(all_mae).mean().item(),
-        'mae_dbm_std': torch.cat(all_mae).std().item(),
-        'psnr': torch.cat(all_psnr).mean().item(),
-        'psnr_std': torch.cat(all_psnr).std().item(),
-        'ssim': torch.cat(all_ssim).mean().item(),
-        'ssim_std': torch.cat(all_ssim).std().item(),
+        'rmse_dbm': float(rmse_values.mean()),
+        'rmse_dbm_std': float(rmse_values.std()),
+        'mae_dbm': float(mae_values.mean()),
+        'mae_dbm_std': float(mae_values.std()),
+        'psnr': float(psnr_values.mean()),
+        'psnr_std': float(psnr_values.std()),
+        'ssim': float(ssim_values.mean()),
+        'ssim_std': float(ssim_values.std()),
         'num_samples': total_samples,
+        # C4: Store per-sample metrics for significance testing
+        'per_sample_rmse_dbm': rmse_values.tolist(),
+        'per_sample_mae_dbm': mae_values.tolist(),
+        'per_sample_psnr': psnr_values.tolist(),
+        'per_sample_ssim': ssim_values.tolist(),
     }
 
     if all_traj_rmse:
-        metrics['trajectory_rmse_dbm'] = torch.cat(all_traj_rmse).mean().item()
-        metrics['blind_spot_rmse_dbm'] = torch.cat(all_blind_rmse).mean().item()
+        traj_rmse_values = torch.cat(all_traj_rmse).cpu().numpy()
+        blind_rmse_values = torch.cat(all_blind_rmse).cpu().numpy()
+        metrics['trajectory_rmse_dbm'] = float(traj_rmse_values.mean())
+        metrics['blind_spot_rmse_dbm'] = float(blind_rmse_values.mean())
+        metrics['per_sample_trajectory_rmse_dbm'] = traj_rmse_values.tolist()
+        metrics['per_sample_blind_spot_rmse_dbm'] = blind_rmse_values.tolist()
 
     if all_uncertainty:
-        metrics['mean_uncertainty'] = torch.cat(all_uncertainty).mean().item()
+        uncertainty_values = torch.cat(all_uncertainty).cpu().numpy()
+        metrics['mean_uncertainty'] = float(uncertainty_values.mean())
+        metrics['per_sample_uncertainty'] = uncertainty_values.tolist()
+
+    # C6: Diversity metrics
+    if all_diversity:
+        metrics['mean_diversity'] = float(np.mean(all_diversity))
+        metrics['std_diversity'] = float(np.std(all_diversity))
+
+    # M10: Per-region metrics
+    if all_ssim_observed:
+        metrics['ssim_observed'] = float(np.nanmean(all_ssim_observed))
+        metrics['psnr_observed'] = float(np.nanmean(all_psnr_observed))
+    if all_ssim_unobserved:
+        metrics['ssim_unobserved'] = float(np.nanmean(all_ssim_unobserved))
+        metrics['psnr_unobserved'] = float(np.nanmean(all_psnr_unobserved))
 
     return metrics
 
@@ -387,6 +500,8 @@ def main(cfg: DictConfig):
     max_samples = cfg.get('max_samples', None)
     compute_unc = cfg.get('uncertainty', False)
     num_unc_samples = cfg.get('num_uncertainty_samples', 10)
+    compute_div = cfg.get('diversity', False)  # C6
+    num_div_samples = cfg.get('num_diversity_samples', 5)  # C6
 
     # Evaluate
     print("\nEvaluating...")
@@ -398,6 +513,8 @@ def main(cfg: DictConfig):
         use_ddim=True,
         compute_uncertainty=compute_unc,
         num_uncertainty_samples=num_unc_samples,
+        compute_diversity=compute_div,
+        num_diversity_samples=num_div_samples,
     )
 
     # Print results
@@ -416,9 +533,23 @@ def main(cfg: DictConfig):
         print(f"  Trajectory RMSE:  {metrics['trajectory_rmse_dbm']:.2f} dBm (on observed points)")
         print(f"  Blind Spot RMSE:  {metrics['blind_spot_rmse_dbm']:.2f} dBm (on unobserved points)")
 
+    # M10: Per-region metrics
+    if 'ssim_observed' in metrics:
+        print(f"\nPer-Region Metrics (M10):")
+        print(f"  SSIM (observed):    {metrics['ssim_observed']:.4f}")
+        print(f"  SSIM (unobserved):  {metrics['ssim_unobserved']:.4f}")
+        print(f"  PSNR (observed):    {metrics['psnr_observed']:.2f} dB")
+        print(f"  PSNR (unobserved):  {metrics['psnr_unobserved']:.2f} dB")
+
     if 'mean_uncertainty' in metrics:
         print(f"\nUncertainty Estimation:")
         print(f"  Mean Uncertainty: {metrics['mean_uncertainty']:.4f}")
+
+    # C6: Diversity metrics
+    if 'mean_diversity' in metrics:
+        print(f"\nSample Diversity (C6):")
+        print(f"  Mean Diversity: {metrics['mean_diversity']:.4f}")
+        print(f"  Std Diversity:  {metrics['std_diversity']:.4f}")
 
     # Save results
     output_dir = Path(hydra.core.hydra_config.HydraConfig.get().runtime.output_dir)

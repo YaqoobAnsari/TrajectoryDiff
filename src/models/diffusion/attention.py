@@ -9,7 +9,6 @@ Key insight: When denoising, we should:
 - Be more exploratory in low-coverage regions (blind spots)
 """
 
-import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -41,7 +40,7 @@ class CoverageAwareAttention(nn.Module):
         dim: int,
         num_heads: int = 8,
         coverage_temperature: float = 1.0,
-        qkv_bias: bool = False,
+        qkv_bias: bool = True,
         dropout: float = 0.0,
     ):
         super().__init__()
@@ -59,9 +58,9 @@ class CoverageAwareAttention(nn.Module):
             nn.Dropout(dropout) if dropout > 0 else nn.Identity(),
         )
 
-        # Learnable coverage modulation
-        # Maps scalar coverage to per-head scaling factors
-        self.coverage_gate = nn.Sequential(
+        # Learnable coverage bias head
+        # Maps scalar coverage to per-head bias factors
+        self.coverage_bias_head = nn.Sequential(
             nn.Linear(1, dim // 4),
             nn.SiLU(),
             nn.Linear(dim // 4, num_heads),
@@ -95,23 +94,20 @@ class CoverageAwareAttention(nn.Module):
         # Compute attention scores
         attn = (q @ k.transpose(-2, -1)) * self.scale  # (B, heads, N, N)
 
-        # NOVEL: Modulate attention by coverage density
+        # NOVEL: Modulate attention by coverage density via additive log-bias
         if coverage is not None:
-            # coverage_gate produces per-head scaling factors
-            coverage_scale = self.coverage_gate(coverage)  # (B, N, heads)
+            # coverage_bias_head produces per-head bias factors in [0, 1]
+            coverage_scale = self.coverage_bias_head(coverage)  # (B, N, heads)
             coverage_scale = coverage_scale.permute(0, 2, 1).unsqueeze(-1)  # (B, heads, N, 1)
 
-            # Scale attention to keys based on their coverage
+            # Bias attention to keys based on their coverage
             # High coverage keys get higher attention
             key_coverage = coverage_scale.transpose(-2, -1)  # (B, heads, 1, N)
 
-            # Temperature-scaled modulation
-            # Higher temperature = more uniform attention
-            # Lower temperature = more coverage-dependent
-            coverage_weight = key_coverage ** (1.0 / self.coverage_temperature)
-
-            # Multiplicative attention modulation
-            attn = attn * coverage_weight
+            # Additive log-bias: always suppresses low-coverage keys
+            # Temperature controls modulation strength
+            coverage_logbias = torch.log(key_coverage + 1e-6) / self.coverage_temperature
+            attn = attn + coverage_logbias
 
         # Softmax normalization
         attn = attn.softmax(dim=-1)
@@ -121,68 +117,6 @@ class CoverageAwareAttention(nn.Module):
         out = out.transpose(1, 2).reshape(B, N, D)
 
         return self.to_out(out)
-
-
-class CoverageAwareTransformerBlock(nn.Module):
-    """
-    Transformer block with coverage-aware attention.
-
-    Standard pre-norm transformer block but with coverage-aware attention
-    instead of standard self-attention.
-
-    Args:
-        dim: Feature dimension
-        num_heads: Number of attention heads
-        mlp_ratio: MLP hidden dim multiplier
-        dropout: Dropout rate
-        coverage_temperature: Temperature for coverage modulation
-    """
-
-    def __init__(
-        self,
-        dim: int,
-        num_heads: int = 8,
-        mlp_ratio: float = 4.0,
-        dropout: float = 0.0,
-        coverage_temperature: float = 1.0,
-    ):
-        super().__init__()
-        self.norm1 = nn.LayerNorm(dim)
-        self.attn = CoverageAwareAttention(
-            dim,
-            num_heads,
-            coverage_temperature=coverage_temperature,
-            dropout=dropout,
-        )
-        self.norm2 = nn.LayerNorm(dim)
-
-        mlp_hidden_dim = int(dim * mlp_ratio)
-        self.ffn = nn.Sequential(
-            nn.Linear(dim, mlp_hidden_dim),
-            nn.GELU(),
-            nn.Dropout(dropout) if dropout > 0 else nn.Identity(),
-            nn.Linear(mlp_hidden_dim, dim),
-            nn.Dropout(dropout) if dropout > 0 else nn.Identity(),
-        )
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        coverage: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        """
-        Forward pass with optional coverage modulation.
-
-        Args:
-            x: Input features (B, N, D)
-            coverage: Optional coverage density (B, N, 1)
-
-        Returns:
-            Output features (B, N, D)
-        """
-        x = x + self.attn(self.norm1(x), coverage)
-        x = x + self.ffn(self.norm2(x))
-        return x
 
 
 class CoverageAwareAttentionBlock(nn.Module):
@@ -256,102 +190,6 @@ class CoverageAwareAttentionBlock(nn.Module):
 
         # Residual connection
         return x + h
-
-
-class AdaptiveCoverageAttention(nn.Module):
-    """
-    Attention with adaptive coverage fusion.
-
-    Learns to combine standard attention and coverage-weighted attention
-    based on the input features. This provides flexibility during training
-    to balance between the two modalities.
-
-    Args:
-        dim: Feature dimension
-        num_heads: Number of attention heads
-    """
-
-    def __init__(
-        self,
-        dim: int,
-        num_heads: int = 8,
-    ):
-        super().__init__()
-        self.dim = dim
-        self.num_heads = num_heads
-        self.head_dim = dim // num_heads
-        self.scale = self.head_dim ** -0.5
-
-        self.to_qkv = nn.Linear(dim, dim * 3, bias=False)
-        self.to_out = nn.Linear(dim, dim)
-
-        # Coverage embedding
-        self.coverage_embed = nn.Sequential(
-            nn.Linear(1, dim // 4),
-            nn.SiLU(),
-            nn.Linear(dim // 4, num_heads),
-        )
-
-        # Learnable fusion weight (how much to trust coverage)
-        self.fusion_gate = nn.Sequential(
-            nn.Linear(dim, dim // 4),
-            nn.SiLU(),
-            nn.Linear(dim // 4, 1),
-            nn.Sigmoid(),
-        )
-
-    def forward(
-        self,
-        x: torch.Tensor,                 # (B, N, D)
-        coverage: Optional[torch.Tensor] = None,  # (B, N, 1)
-    ) -> torch.Tensor:
-        """
-        Apply adaptive coverage-aware attention.
-
-        Args:
-            x: Input features (B, N, D)
-            coverage: Optional coverage density (B, N, 1)
-
-        Returns:
-            Output features (B, N, D)
-        """
-        B, N, D = x.shape
-
-        # QKV projection
-        qkv = self.to_qkv(x).chunk(3, dim=-1)
-        q, k, v = map(
-            lambda t: t.view(B, N, self.num_heads, self.head_dim).transpose(1, 2),
-            qkv
-        )
-
-        # Standard attention scores
-        attn_standard = (q @ k.transpose(-2, -1)) * self.scale
-
-        if coverage is not None:
-            # Coverage-weighted attention
-            coverage_bias = self.coverage_embed(coverage)  # (B, N, heads)
-            coverage_bias = coverage_bias.permute(0, 2, 1).unsqueeze(-2)  # (B, heads, 1, N)
-
-            # Add coverage as bias to attention (keys with high coverage get boosted)
-            attn_coverage = attn_standard + coverage_bias
-
-            # Compute fusion weight from input features
-            # Pool over sequence dimension
-            x_pooled = x.mean(dim=1)  # (B, D)
-            fusion_weight = self.fusion_gate(x_pooled)  # (B, 1)
-            fusion_weight = fusion_weight.view(B, 1, 1, 1)  # (B, 1, 1, 1)
-
-            # Fuse standard and coverage-weighted attention
-            attn = fusion_weight * attn_coverage + (1 - fusion_weight) * attn_standard
-        else:
-            attn = attn_standard
-
-        # Softmax and apply to values
-        attn = attn.softmax(dim=-1)
-        out = attn @ v
-        out = out.transpose(1, 2).reshape(B, N, D)
-
-        return self.to_out(out)
 
 
 def downsample_coverage(

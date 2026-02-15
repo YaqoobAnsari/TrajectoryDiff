@@ -15,6 +15,7 @@ References:
 import math
 from typing import Dict, Optional, Tuple, Union
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -151,6 +152,7 @@ class GaussianDiffusion(nn.Module):
         loss_type: str = 'mse',
         clip_denoised: bool = True,
         prediction_type: str = 'epsilon',  # 'epsilon' or 'x0' or 'v'
+        min_snr_gamma: float = 5.0,
     ):
         """
         Initialize diffusion process.
@@ -166,6 +168,9 @@ class GaussianDiffusion(nn.Module):
                 - 'epsilon': predicts the noise (standard DDPM)
                 - 'x0': predicts the clean image directly
                 - 'v': predicts velocity (progressive distillation)
+            min_snr_gamma: Min-SNR-gamma clipping value for loss weighting
+                (Hang et al., "Efficient Diffusion Training via Min-SNR Weighting
+                Strategy", ICCV 2023). Set to 0 to disable.
         """
         super().__init__()
 
@@ -173,6 +178,7 @@ class GaussianDiffusion(nn.Module):
         self.loss_type = loss_type
         self.clip_denoised = clip_denoised
         self.prediction_type = prediction_type
+        self.min_snr_gamma = min_snr_gamma
 
         # Create noise schedule
         if beta_schedule == 'linear':
@@ -221,6 +227,17 @@ class GaussianDiffusion(nn.Module):
             'posterior_mean_coef2',
             (1.0 - alphas_cumprod_prev) * torch.sqrt(alphas) / (1.0 - alphas_cumprod)
         )
+
+        # Min-SNR-gamma weighting (Hang et al., ICCV 2023)
+        # SNR(t) = alpha_bar_t / (1 - alpha_bar_t)
+        snr = alphas_cumprod / (1.0 - alphas_cumprod)
+        if min_snr_gamma > 0:
+            # weight = clamp(SNR, max=gamma) / SNR — down-weights high-SNR (low t) steps
+            min_snr_weight = torch.clamp(snr, max=min_snr_gamma) / snr
+        else:
+            min_snr_weight = torch.ones_like(snr)
+        self.register_buffer('snr', snr)
+        self.register_buffer('min_snr_weight', min_snr_weight)
 
     def _extract(self, a: torch.Tensor, t: torch.Tensor, x_shape: Tuple) -> torch.Tensor:
         """
@@ -539,6 +556,11 @@ class GaussianDiffusion(nn.Module):
         # Average over all dimensions except batch
         loss = loss.mean(dim=list(range(1, len(loss.shape))))
 
+        # Apply Min-SNR-gamma weighting per sample
+        if self.min_snr_gamma > 0:
+            snr_weight = self._extract(self.min_snr_weight, t, (loss.shape[0], 1)).squeeze()
+            loss = loss * snr_weight
+
         return {
             'loss': loss.mean(),
             'loss_per_sample': loss,
@@ -586,9 +608,12 @@ class DDIMSampler:
         self.ddim_num_steps = ddim_num_steps
         self.ddim_eta = ddim_eta
 
-        # Compute DDIM timestep sequence
-        c = diffusion.num_timesteps // ddim_num_steps
-        self.ddim_timesteps = list(range(0, diffusion.num_timesteps, c))
+        # Compute DDIM timestep sequence spanning full [0, T-1] range
+        # Using np.linspace ensures the last timestep (T-1) is always included,
+        # unlike range(0, T, T//steps) which can miss final timesteps.
+        self.ddim_timesteps = np.linspace(
+            0, diffusion.num_timesteps - 1, ddim_num_steps, dtype=int
+        ).tolist()
 
     @torch.no_grad()
     def sample(
@@ -666,8 +691,10 @@ class DDIMSampler:
                 (1 - alpha_bar_t_prev) / (1 - alpha_bar_t) * (1 - alpha_bar_t / alpha_bar_t_prev)
             )
 
-            # Predict direction
-            pred_dir = torch.sqrt(1 - alpha_bar_t_prev - sigma_t ** 2) * (
+            # Predict direction (clamp inside sqrt to prevent NaN when eta > 0)
+            pred_dir = torch.sqrt(
+                torch.clamp(1 - alpha_bar_t_prev - sigma_t ** 2, min=0)
+            ) * (
                 (x - torch.sqrt(alpha_bar_t) * pred_x0) / torch.sqrt(1 - alpha_bar_t)
             )
 

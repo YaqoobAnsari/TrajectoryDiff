@@ -12,9 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from models.diffusion.attention import (
     CoverageAwareAttention,
-    CoverageAwareTransformerBlock,
     CoverageAwareAttentionBlock,
-    AdaptiveCoverageAttention,
     downsample_coverage,
     upsample_coverage,
 )
@@ -100,41 +98,6 @@ class TestCoverageAwareAttention:
         assert not torch.allclose(out_low, out_high)
 
 
-class TestCoverageAwareTransformerBlock:
-    """Tests for CoverageAwareTransformerBlock."""
-
-    def test_basic_forward(self):
-        """Test basic forward pass."""
-        block = CoverageAwareTransformerBlock(dim=64, num_heads=4)
-
-        x = torch.randn(2, 16, 64)
-        out = block(x)
-
-        assert out.shape == x.shape
-
-    def test_forward_with_coverage(self):
-        """Test forward with coverage input."""
-        block = CoverageAwareTransformerBlock(dim=64, num_heads=4)
-
-        x = torch.randn(2, 16, 64)
-        coverage = torch.rand(2, 16, 1)
-
-        out = block(x, coverage)
-
-        assert out.shape == x.shape
-
-    def test_residual_connection(self):
-        """Test that residual connection works (output != 0 even if attention is 0)."""
-        block = CoverageAwareTransformerBlock(dim=64, num_heads=4)
-
-        # Create input where attention would be small
-        x = torch.randn(2, 16, 64)
-        out = block(x)
-
-        # Output should not be zero due to residual
-        assert not torch.allclose(out, torch.zeros_like(out))
-
-
 class TestCoverageAwareAttentionBlock:
     """Tests for CoverageAwareAttentionBlock (spatial version)."""
 
@@ -179,43 +142,6 @@ class TestCoverageAwareAttentionBlock:
             x = torch.randn(2, 64, size, size)
             out = block(x)
             assert out.shape == x.shape
-
-
-class TestAdaptiveCoverageAttention:
-    """Tests for AdaptiveCoverageAttention."""
-
-    def test_basic_forward(self):
-        """Test basic forward pass."""
-        attn = AdaptiveCoverageAttention(dim=64, num_heads=4)
-
-        x = torch.randn(2, 16, 64)
-        out = attn(x)
-
-        assert out.shape == x.shape
-
-    def test_forward_with_coverage(self):
-        """Test forward with coverage."""
-        attn = AdaptiveCoverageAttention(dim=64, num_heads=4)
-
-        x = torch.randn(2, 16, 64)
-        coverage = torch.rand(2, 16, 1)
-
-        out = attn(x, coverage)
-
-        assert out.shape == x.shape
-
-    def test_gradient_flow(self):
-        """Test gradient flow through adaptive attention."""
-        attn = AdaptiveCoverageAttention(dim=64, num_heads=4)
-
-        x = torch.randn(2, 16, 64, requires_grad=True)
-        coverage = torch.rand(2, 16, 1)
-
-        out = attn(x, coverage)
-        loss = out.sum()
-        loss.backward()
-
-        assert x.grad is not None
 
 
 class TestCoverageResampling:

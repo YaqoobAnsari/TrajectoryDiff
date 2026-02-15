@@ -258,8 +258,12 @@ class TestCoverageEffect:
         unet.eval()
         x, t, cond, _ = make_inputs(with_coverage=False)
 
-        coverage_a = torch.ones(B, 1, H, W)
-        coverage_b = torch.zeros(B, 1, H, W)
+        # Use spatially varying coverage so the additive log-bias
+        # produces non-uniform shifts across keys (uniform coverage
+        # cancels out in softmax).
+        torch.manual_seed(42)
+        coverage_a = torch.rand(B, 1, H, W)
+        coverage_b = 1.0 - coverage_a  # Inverted spatial pattern
 
         with torch.no_grad():
             out_a = unet(x, t, cond=cond, coverage=coverage_a)

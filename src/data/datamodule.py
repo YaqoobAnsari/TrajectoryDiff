@@ -4,13 +4,24 @@ PyTorch Lightning DataModule for RadioMapSeer.
 Provides train/val/test dataloaders with proper configuration.
 """
 
+import random
 from pathlib import Path
 from typing import Optional, Union
 
 import lightning as L
+import numpy as np
+import torch
 from torch.utils.data import DataLoader
 
 from .dataset import RadioMapDataset, UniformSamplingDataset
+from .transforms import get_train_transforms
+
+
+def _worker_init_fn(worker_id: int) -> None:
+    """Initialize worker with proper random seeds for reproducibility."""
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
 
 
 class RadioMapDataModule(L.LightningDataModule):
@@ -141,22 +152,31 @@ class RadioMapDataModule(L.LightningDataModule):
             common_kwargs['sampling_rate'] = self.uniform_sampling_rate
 
         if stage == 'fit' or stage is None:
+            # Train dataset with augmentation
+            train_transform = get_train_transforms()
             self.train_dataset = DatasetClass(
                 map_ids=splits['train'],
                 seed=self.seed,
+                transform=train_transform,
                 **common_kwargs
             )
+            # Enable trajectory caching for val to improve reproducibility (no augmentation)
+            val_kwargs = {**common_kwargs, 'trajectory_cache_sets': max(5, self.trajectory_cache_sets)}
             self.val_dataset = DatasetClass(
                 map_ids=splits['val'],
                 seed=self.seed + 1000 if self.seed else None,
-                **common_kwargs
+                transform=None,
+                **val_kwargs
             )
 
         if stage == 'test' or stage is None:
+            # Enable trajectory caching for test to improve reproducibility (no augmentation)
+            test_kwargs = {**common_kwargs, 'trajectory_cache_sets': max(5, self.trajectory_cache_sets)}
             self.test_dataset = DatasetClass(
                 map_ids=splits['test'],
                 seed=self.seed + 2000 if self.seed else None,
-                **common_kwargs
+                transform=None,
+                **test_kwargs
             )
 
     def _dataloader_kwargs(self) -> dict:
@@ -175,6 +195,7 @@ class RadioMapDataModule(L.LightningDataModule):
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
             drop_last=True,
+            worker_init_fn=_worker_init_fn,
             **self._dataloader_kwargs(),
         )
 
@@ -185,6 +206,7 @@ class RadioMapDataModule(L.LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
+            worker_init_fn=_worker_init_fn,
             **self._dataloader_kwargs(),
         )
 
@@ -195,6 +217,7 @@ class RadioMapDataModule(L.LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
+            worker_init_fn=_worker_init_fn,
             **self._dataloader_kwargs(),
         )
 

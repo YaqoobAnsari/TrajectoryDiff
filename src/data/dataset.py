@@ -50,6 +50,7 @@ class RadioMapDataset(Dataset):
         cache_radio_maps: bool = False,
         trajectory_cache_sets: int = 0,
         seed: Optional[int] = None,
+        transform: Optional[callable] = None,
     ):
         """
         Initialize RadioMapDataset.
@@ -72,6 +73,7 @@ class RadioMapDataset(Dataset):
                 0 = generate on-the-fly (default). >0 = pre-generate and cycle through
                 cached sets. Reduces per-sample overhead from ~30-50ms to <1ms.
             seed: Random seed for trajectory generation
+            transform: Optional transform to apply to samples
         """
         self.data_dir = Path(data_dir)
         self.map_ids = sorted(map_ids)
@@ -83,6 +85,7 @@ class RadioMapDataset(Dataset):
         self.cache_building_maps = cache_building_maps
         self.cache_radio_maps = cache_radio_maps
         self.trajectory_cache_sets = trajectory_cache_sets
+        self.transform = transform
 
         # Setup paths
         self.building_dir = self.data_dir / 'png' / 'buildings_complete'
@@ -165,7 +168,7 @@ class RadioMapDataset(Dataset):
         tx_position_norm = tx_position.astype(np.float32) / float(map_size)
 
         # Convert to tensors
-        return {
+        sample = {
             'building_map': torch.from_numpy(building_map[None]).float(),
             'radio_map': torch.from_numpy(radio_map[None]).float(),
             'sparse_rss': torch.from_numpy(sparse_rss[None]).float(),
@@ -175,6 +178,12 @@ class RadioMapDataset(Dataset):
             'map_id': map_id,
             'tx_id': tx_id,
         }
+
+        # Apply transform if provided
+        if self.transform is not None:
+            sample = self.transform(sample)
+
+        return sample
 
     def _load_building_map(self, map_id: int) -> np.ndarray:
         """Load building map with optional caching."""
@@ -378,7 +387,7 @@ class UniformSamplingDataset(RadioMapDataset):
         map_size = radio_map.shape[-1] if radio_map.ndim > 1 else 256
         tx_position_norm = tx_position.astype(np.float32) / float(map_size)
 
-        return {
+        sample = {
             'building_map': torch.from_numpy(building_map[None]).float(),
             'radio_map': torch.from_numpy(radio_map[None]).float(),
             'sparse_rss': torch.from_numpy(sparse_rss[None]).float(),
@@ -388,6 +397,12 @@ class UniformSamplingDataset(RadioMapDataset):
             'map_id': map_id,
             'tx_id': tx_id,
         }
+
+        # Apply transform if provided
+        if self.transform is not None:
+            sample = self.transform(sample)
+
+        return sample
 
     def _uniform_sample(
         self,

@@ -24,6 +24,16 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+# M11: Publication-quality settings
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['font.serif'] = ['Computer Modern Roman']
+plt.rcParams['mathtext.fontset'] = 'cm'
+plt.rcParams['axes.labelsize'] = 11
+plt.rcParams['xtick.labelsize'] = 10
+plt.rcParams['ytick.labelsize'] = 10
+plt.rcParams['legend.fontsize'] = 10
+plt.rcParams['figure.dpi'] = 300
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 try:
@@ -53,7 +63,7 @@ def load_json(path: Path) -> dict:
 # Figure 1: Ablation Bar Chart
 # ============================================================
 def plot_ablation_chart(results_dir: Path, output_dir: Path):
-    """Generate ablation study bar chart from experiment metrics."""
+    """Generate ablation study bar chart from experiment metrics (M11: publication quality)."""
     ablation_experiments = [
         ("trajectory_full", "Full Model"),
         ("ablation_no_physics_loss", "- Physics Loss"),
@@ -66,6 +76,7 @@ def plot_ablation_chart(results_dir: Path, output_dir: Path):
 
     names = []
     rmse_vals = []
+    rmse_stds = []  # M11: error bars
     found = False
 
     for exp_name, label in ablation_experiments:
@@ -76,8 +87,10 @@ def plot_ablation_chart(results_dir: Path, output_dir: Path):
         if metrics_path.exists():
             metrics = load_json(metrics_path)
             rmse_key = "rmse_dbm" if "rmse_dbm" in metrics else "rmse"
+            std_key = "rmse_dbm_std" if "rmse_dbm_std" in metrics else "rmse_std"
             names.append(label)
             rmse_vals.append(metrics[rmse_key])
+            rmse_stds.append(metrics.get(std_key, 0.0))
             found = True
 
     if not found:
@@ -86,20 +99,33 @@ def plot_ablation_chart(results_dir: Path, output_dir: Path):
 
     fig, ax = plt.subplots(figsize=(10, 6))
     colors = ["#2ecc71"] + ["#e74c3c"] * (len(names) - 1)
-    bars = ax.barh(range(len(names)), rmse_vals, color=colors, edgecolor="white", linewidth=0.5)
-    ax.set_yticks(range(len(names)))
+    y_pos = np.arange(len(names))
+
+    # M11: Add error bars
+    bars = ax.barh(y_pos, rmse_vals, xerr=rmse_stds, capsize=5,
+                   color=colors, edgecolor="white", linewidth=0.5, alpha=0.85)
+    ax.set_yticks(y_pos)
     ax.set_yticklabels(names)
     ax.set_xlabel("RMSE (dBm)")
-    ax.set_title("Ablation Study: Component Contributions")
+    ax.set_title("Ablation Study: Component Contributions", fontweight='bold')
     ax.invert_yaxis()
+    ax.grid(axis='x', alpha=0.3, linestyle='--')
 
-    # Add value labels
-    for bar, val in zip(bars, rmse_vals):
-        ax.text(bar.get_width() + 0.1, bar.get_y() + bar.get_height() / 2,
-                f"{val:.2f}", va="center", fontsize=10)
+    # M11: Add value labels with significance markers
+    baseline_rmse = rmse_vals[0] if rmse_vals else 0
+    for i, (bar, val, std) in enumerate(zip(bars, rmse_vals, rmse_stds)):
+        # Simple significance marker (** if > 2 std from baseline)
+        sig_marker = ""
+        if i > 0 and abs(val - baseline_rmse) > 2 * std:
+            sig_marker = "**"
+        elif i > 0 and abs(val - baseline_rmse) > std:
+            sig_marker = "*"
+
+        ax.text(bar.get_width() + std + 0.2, bar.get_y() + bar.get_height() / 2,
+                f"{val:.2f}{sig_marker}", va="center", fontsize=10)
 
     plt.tight_layout()
-    fig.savefig(output_dir / "ablation_bar_chart.pdf", bbox_inches="tight")
+    fig.savefig(output_dir / "ablation_bar_chart.pdf", bbox_inches="tight", dpi=300)
     fig.savefig(output_dir / "ablation_bar_chart.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
     print("  Saved ablation_bar_chart.pdf")
@@ -224,7 +250,7 @@ def plot_main_results_table(results_dir: Path, output_dir: Path):
 def plot_qualitative_comparison(
     checkpoint_path: str, output_dir: Path, num_samples: int = 4, data_dir: str = "data/raw"
 ):
-    """Generate qualitative comparison figure from a trained model."""
+    """Generate qualitative comparison figure from a trained model (M11: publication quality)."""
     if not TORCH_AVAILABLE or not MODEL_IMPORTS_AVAILABLE:
         print("  [SKIP] torch or model imports not available for qualitative comparison")
         return
@@ -268,6 +294,13 @@ def plot_qualitative_comparison(
 
     n = min(num_samples, pred.shape[0])
 
+    # M11: Consistent colorbar ranges across methods
+    global_vmin = np.inf
+    global_vmax = -np.inf
+    for i in range(n):
+        global_vmin = min(global_vmin, gt[i, 0].min(), pred[i, 0].min())
+        global_vmax = max(global_vmax, gt[i, 0].max(), pred[i, 0].max())
+
     # Column order: Building, Trajectory, GT, Ours, IDW, NN, Error
     fig, axes = plt.subplots(n, 7, figsize=(28, 4 * n))
     if n == 1:
@@ -282,9 +315,6 @@ def plot_qualitative_comparison(
         sp = sparse[i, 0]
         mask = traj_mask[i, 0]
 
-        vmin = min(gt_i.min(), pred_i.min())
-        vmax = max(gt_i.max(), pred_i.max())
-
         # Building map
         axes[i, 0].imshow(bm, cmap="gray")
 
@@ -293,19 +323,20 @@ def plot_qualitative_comparison(
         ys, xs = np.where(mask > 0)
         axes[i, 1].scatter(xs, ys, c="red", s=3, alpha=0.6)
 
+        # M11: Use consistent colorbar range
         # Ground truth
-        axes[i, 2].imshow(gt_i, cmap=RADIO_CMAP, vmin=vmin, vmax=vmax)
+        axes[i, 2].imshow(gt_i, cmap=RADIO_CMAP, vmin=global_vmin, vmax=global_vmax)
 
         # Our prediction
-        axes[i, 3].imshow(pred_i, cmap=RADIO_CMAP, vmin=vmin, vmax=vmax)
+        axes[i, 3].imshow(pred_i, cmap=RADIO_CMAP, vmin=global_vmin, vmax=global_vmax)
 
         # IDW
         idw_pred = idw(sp, mask)
-        axes[i, 4].imshow(idw_pred, cmap=RADIO_CMAP, vmin=vmin, vmax=vmax)
+        axes[i, 4].imshow(idw_pred, cmap=RADIO_CMAP, vmin=global_vmin, vmax=global_vmax)
 
         # Nearest Neighbor
         nn_pred = nn_baseline(sp, mask)
-        axes[i, 5].imshow(nn_pred, cmap=RADIO_CMAP, vmin=vmin, vmax=vmax)
+        axes[i, 5].imshow(nn_pred, cmap=RADIO_CMAP, vmin=global_vmin, vmax=global_vmax)
 
         # Error map
         error = np.abs(gt_i - pred_i)
@@ -314,10 +345,10 @@ def plot_qualitative_comparison(
         for j in range(7):
             axes[i, j].axis("off")
             if i == 0:
-                axes[i, j].set_title(col_titles[j], fontsize=12)
+                axes[i, j].set_title(col_titles[j], fontsize=12, fontweight='bold')
 
     plt.tight_layout()
-    fig.savefig(output_dir / "qualitative_comparison.pdf", bbox_inches="tight")
+    fig.savefig(output_dir / "qualitative_comparison.pdf", bbox_inches="tight", dpi=300)
     fig.savefig(output_dir / "qualitative_comparison.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
     print("  Saved qualitative_comparison.pdf")

@@ -47,6 +47,7 @@ class TrajectoryConsistencyLoss(nn.Module):
         pred_map: torch.Tensor,       # (B, 1, H, W) predicted radio map
         sparse_rss: torch.Tensor,     # (B, 1, H, W) observed RSS values
         trajectory_mask: torch.Tensor, # (B, 1, H, W) binary mask
+        reduction: str = 'mean',      # 'mean' or 'none'
     ) -> torch.Tensor:
         """
         Compute trajectory consistency loss.
@@ -55,13 +56,34 @@ class TrajectoryConsistencyLoss(nn.Module):
             pred_map: Predicted radio map
             sparse_rss: Ground truth RSS at observed locations
             trajectory_mask: Binary mask indicating observed locations
+            reduction: 'mean' returns scalar; 'none' returns (B,) per-sample losses
 
         Returns:
-            Scalar loss value
+            Scalar loss value (reduction='mean') or (B,) per-sample losses (reduction='none')
         """
-        # Only compute loss where we have observations
+        B = pred_map.shape[0]
         mask = trajectory_mask > 0.5
 
+        if reduction == 'none':
+            # Per-sample losses for SNR weighting
+            per_sample = []
+            for i in range(B):
+                sample_mask = mask[i]
+                if sample_mask.sum() == 0:
+                    per_sample.append(torch.tensor(0.0, device=pred_map.device))
+                else:
+                    sample_loss = F.mse_loss(
+                        pred_map[i][sample_mask], sparse_rss[i][sample_mask]
+                    )
+                    if self.smoothness_weight > 0:
+                        smooth = self._compute_smoothness(
+                            pred_map[i:i+1], trajectory_mask[i:i+1]
+                        )
+                        sample_loss = sample_loss + self.smoothness_weight * smooth
+                    per_sample.append(sample_loss)
+            return torch.stack(per_sample)
+
+        # Original scalar reduction
         if mask.sum() == 0:
             return torch.tensor(0.0, device=pred_map.device, requires_grad=True)
 
@@ -71,7 +93,6 @@ class TrajectoryConsistencyLoss(nn.Module):
         consistency_loss = F.mse_loss(pred_on_traj, obs_on_traj)
 
         # Optional: Local smoothness along trajectory
-        # (predictions should vary smoothly along the path)
         if self.smoothness_weight > 0:
             smoothness_loss = self._compute_smoothness(pred_map, trajectory_mask)
             return consistency_loss + self.smoothness_weight * smoothness_loss
@@ -105,6 +126,14 @@ class CoverageWeightedLoss(nn.Module):
 
     High coverage (on trajectory) → high weight (be accurate!)
     Low coverage (blind spot) → low weight (allow exploration)
+
+    NOTE: Spatial weighting violates the standard ELBO bound because the
+    uniform-weight diffusion loss is a (scaled) variational lower bound on
+    log p(x), and non-uniform weighting breaks this correspondence. This is
+    intentional: our objective is task-specific reconstruction quality (minimizing
+    dBm RMSE in observed regions), NOT generative modeling of the radio-map
+    distribution. The coverage weighting trades theoretically-grounded generation
+    for better practical reconstruction fidelity where measurements exist.
     """
 
     def __init__(self, min_weight: float = 0.1, max_weight: float = 1.0):
@@ -189,56 +218,61 @@ class DistanceDecayLoss(nn.Module):
         pred_map: torch.Tensor,      # (B, 1, H, W) predicted radio map
         tx_position: torch.Tensor,   # (B, 2) normalized TX position
         building_map: torch.Tensor,  # (B, 1, H, W) to mask out walls
+        reduction: str = 'mean',     # 'mean' or 'none'
     ) -> torch.Tensor:
         """
         Penalize signal INCREASING with distance from TX.
+
+        Computes per-sample near/far means (not mixing pixels across samples)
+        then averages across the batch.
 
         Args:
             pred_map: Predicted radio map
             tx_position: Normalized (0-1) transmitter position
             building_map: Building map in [-1,1] where -1 = wall, +1 = walkable
+            reduction: 'mean' returns scalar; 'none' returns (B,) per-sample losses
 
         Returns:
-            Scalar penalty for physics violations
+            Scalar penalty (reduction='mean') or (B,) per-sample penalties (reduction='none')
         """
         B, C, H, W = pred_map.shape
 
-        # Vectorized distance computation (no Python loop over batch)
-        # tx_position: (B, 2) -> (B, 1, 1) for broadcasting
+        # Vectorized distance computation
         tx_x = tx_position[:, 0].view(B, 1, 1)
         tx_y = tx_position[:, 1].view(B, 1, 1)
 
-        # Get coordinate grids (uses cached buffers for standard size)
         yy, xx = self._get_grid(H, W, pred_map.device)
         distance_map = torch.sqrt(
             (xx.unsqueeze(0) - tx_x) ** 2 +
             (yy.unsqueeze(0) - tx_y) ** 2
         ).unsqueeze(1)  # (B, 1, H, W)
 
-        # Define near and far regions
         near_tx = distance_map < 0.3
         far_from_tx = distance_map > 0.7
-
-        # Mask out walls (building_map in [-1,1]: -1 = wall, +1 = walkable)
         free_space = building_map > 0.0
 
-        # Compute mean RSS in near and far regions
-        near_mask = near_tx & free_space
-        far_mask = far_from_tx & free_space
+        near_mask = near_tx & free_space  # (B, 1, H, W)
+        far_mask = far_from_tx & free_space  # (B, 1, H, W)
 
-        near_count = near_mask.sum()
-        far_count = far_mask.sum()
+        # Per-sample near/far means to avoid mixing pixels across batch
+        per_sample_violations = []
+        for i in range(B):
+            nm = near_mask[i]  # (1, H, W)
+            fm = far_mask[i]
+            if nm.sum() == 0 or fm.sum() == 0:
+                per_sample_violations.append(
+                    torch.tensor(0.0, device=pred_map.device)
+                )
+            else:
+                near_rss = pred_map[i][nm].mean()
+                far_rss = pred_map[i][fm].mean()
+                per_sample_violations.append(F.relu(far_rss - near_rss))
 
-        if near_count == 0 or far_count == 0:
-            return torch.tensor(0.0, device=pred_map.device, requires_grad=True)
+        per_sample = torch.stack(per_sample_violations)  # (B,)
 
-        near_rss = pred_map[near_mask].mean()
-        far_rss = pred_map[far_mask].mean()
-
-        # Penalize if far RSS > near RSS (physically wrong)
-        violation = F.relu(far_rss - near_rss)
-
-        return self.weight * violation
+        if reduction == 'none':
+            return self.weight * per_sample
+        return self.weight * per_sample.mean()
 
 
 class WallAttenuationLoss(nn.Module):

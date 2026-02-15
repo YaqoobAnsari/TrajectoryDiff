@@ -51,6 +51,7 @@ class CoverageAwareUNet(UNet):
         super().__init__(**kwargs)
         self.coverage_temperature = coverage_temperature
         self._replace_attention_blocks()
+        self._init_weights()
 
     def _replace_attention_blocks(self):
         """Replace all standard AttentionBlocks with CoverageAwareAttentionBlocks."""
@@ -196,7 +197,7 @@ def get_coverage_aware_unet(
             model_channels=64,
             channel_mult=(1, 2, 4, 8),
             num_res_blocks=2,
-            attention_resolutions=(32, 16, 8),
+            attention_resolutions=(32,),
             dropout=0.1,
             num_heads=4,
         ),
@@ -204,7 +205,7 @@ def get_coverage_aware_unet(
             model_channels=128,
             channel_mult=(1, 2, 4, 8),
             num_res_blocks=3,
-            attention_resolutions=(32, 16, 8),
+            attention_resolutions=(32,),
             dropout=0.1,
             num_heads=8,
         ),

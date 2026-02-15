@@ -297,6 +297,129 @@ def psnr(
     return float(10 * np.log10((data_range ** 2) / mse_val))
 
 
+def compute_masked_ssim(
+    pred: np.ndarray,
+    target: np.ndarray,
+    mask: np.ndarray,
+    data_range: Optional[float] = None,
+    win_size: int = 7
+) -> float:
+    """
+    Compute SSIM only within a masked region (M10).
+
+    Args:
+        pred: Predicted radio map, shape (H, W)
+        target: Ground truth radio map, shape (H, W)
+        mask: Binary mask (1=include, 0=exclude), shape (H, W)
+        data_range: Range of data values
+        win_size: Window size for SSIM
+
+    Returns:
+        SSIM value computed only on masked region
+    """
+    if not SKIMAGE_AVAILABLE:
+        raise ImportError("scikit-image required for SSIM")
+
+    # Apply mask
+    mask_bool = mask.astype(bool)
+    if not np.any(mask_bool):
+        return float('nan')
+
+    # For masked SSIM, we compute on the full image but weight by mask
+    # Note: This is an approximation - true masked SSIM would require
+    # sliding window only over masked regions
+    pred_masked = pred.copy()
+    target_masked = target.copy()
+
+    # Set unmasked regions to mean to minimize their influence
+    if np.any(~mask_bool):
+        pred_masked[~mask_bool] = np.mean(pred[mask_bool])
+        target_masked[~mask_bool] = np.mean(target[mask_bool])
+
+    if data_range is None:
+        data_range = target.max() - target.min()
+        if data_range == 0:
+            data_range = 1.0
+
+    return ssim(pred_masked, target_masked, data_range=data_range, win_size=win_size)
+
+
+def compute_masked_psnr(
+    pred: np.ndarray,
+    target: np.ndarray,
+    mask: np.ndarray,
+    data_range: Optional[float] = None
+) -> float:
+    """
+    Compute PSNR only within a masked region (M10).
+
+    Args:
+        pred: Predicted radio map
+        target: Ground truth radio map
+        mask: Binary mask (1=include, 0=exclude)
+        data_range: Range of data values
+
+    Returns:
+        PSNR computed only on masked region
+    """
+    mask_bool = mask.astype(bool)
+    if not np.any(mask_bool):
+        return float('nan')
+
+    mse_val = mse(pred, target, mask=mask)
+    if mse_val == 0:
+        return float('inf')
+
+    if data_range is None:
+        data_range = target.max() - target.min()
+        if data_range == 0:
+            return float('inf')
+
+    return float(10 * np.log10((data_range ** 2) / mse_val))
+
+
+# =============================================================================
+# Sample Diversity Metrics (C6)
+# =============================================================================
+
+def compute_sample_diversity(samples: Union[np.ndarray, 'torch.Tensor']) -> Dict[str, float]:
+    """
+    Compute diversity metrics across multiple samples (C6).
+
+    Measures the variability across N samples of the same input,
+    quantifying epistemic uncertainty and model diversity.
+
+    Args:
+        samples: Multiple samples, shape (N, C, H, W) or (N, H, W)
+            where N is number of samples
+
+    Returns:
+        Dict with diversity metrics:
+        - mean_std: Mean per-pixel standard deviation
+        - median_std: Median per-pixel standard deviation
+        - max_std: Maximum per-pixel standard deviation
+        - mean_range: Mean per-pixel range (max - min)
+    """
+    if TORCH_AVAILABLE and isinstance(samples, torch.Tensor):
+        samples = samples.cpu().numpy()
+
+    # Ensure shape (N, H, W)
+    if samples.ndim == 4:
+        samples = samples.squeeze(1)  # Remove channel dim if present
+
+    # Compute per-pixel std across samples
+    per_pixel_std = np.std(samples, axis=0)  # (H, W)
+    per_pixel_range = np.max(samples, axis=0) - np.min(samples, axis=0)  # (H, W)
+
+    return {
+        'mean_std': float(np.mean(per_pixel_std)),
+        'median_std': float(np.median(per_pixel_std)),
+        'max_std': float(np.max(per_pixel_std)),
+        'mean_range': float(np.mean(per_pixel_range)),
+        'std_90th_percentile': float(np.percentile(per_pixel_std, 90)),
+    }
+
+
 # =============================================================================
 # Coverage-Weighted Metrics
 # =============================================================================

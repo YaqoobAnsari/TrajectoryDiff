@@ -20,6 +20,12 @@ model:
     enabled: true
   physics:
     enabled: true
+    trajectory_consistency:
+      weight: 0.5
+    distance_decay:
+      weight: 0.1
+    warmup_epochs: 30
+    rampup_epochs: 20
 
 training:
   max_epochs: 200

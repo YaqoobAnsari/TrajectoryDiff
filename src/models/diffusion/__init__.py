@@ -27,9 +27,7 @@ from .unet import (
 
 from .attention import (
     CoverageAwareAttention,
-    CoverageAwareTransformerBlock,
     CoverageAwareAttentionBlock,
-    AdaptiveCoverageAttention,
     downsample_coverage,
     upsample_coverage,
 )
@@ -61,9 +59,7 @@ __all__ = [
     'get_coverage_aware_unet',
     # Coverage-Aware Attention
     'CoverageAwareAttention',
-    'CoverageAwareTransformerBlock',
     'CoverageAwareAttentionBlock',
-    'AdaptiveCoverageAttention',
     'downsample_coverage',
     'upsample_coverage',
 ]
