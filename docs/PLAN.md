@@ -39,36 +39,42 @@ All jobs use FRESH=1 (no checkpoint resume from pre-audit runs).
 
 | Job ID | Experiment | Partition / MIG | Batch | Status (Feb 17) | Notes |
 |--------|-----------|-----------------|-------|--------|-------|
-| 2707 | trajectory_full | gpu2 / 7g.141gb | 32 x accum=2 | Epoch 127/200, val/loss=0.00474 | ~21 min/epoch, ~3h to 48h timeout |
-| 2725 | trajectory_baseline | gpu2 / 2g.35gb | 8 x accum=2 | Epoch 29/200, val/loss=0.00376 | ~35 min/epoch, ~30h to timeout |
-| 2726 | uniform_baseline | gpu2 / 2g.35gb | 8 x accum=2 | Epoch 36/200, val/loss=0.00335 | ~28 min/epoch, ~30h to timeout |
+| 2707 | trajectory_full | gpu2 / 7g.141gb | 32 x accum=2 | **TIMEOUT** epoch 135, best=epoch 133 | val/loss=0.00467, needs resume |
+| 2725 | trajectory_baseline | gpu2 / 2g.35gb | 8 x accum=2 | Epoch 37/200, val/loss=0.0034 | ~36 min/epoch, ~24h to timeout |
+| 2726 | uniform_baseline | gpu2 / 2g.35gb | 8 x accum=2 | Epoch 46/200, val/loss=0.00312 | ~30 min/epoch, ~24h to timeout |
 | 2727 | classical baselines (CPU) | cpu / mcore-n01 | - | COMPLETED (but JSON save crashed) | Path import bug — fixed |
-| 2728 | classical baselines (re-run) | cpu / mcore-n01 | - | RUNNING | With per-region dBm metrics |
+| 2728 | classical baselines (re-run) | cpu / mcore-n01 | - | FAILED (SIGTERM at 3809/8480) | Node preemption, not code bug |
+| 2729 | trajectory_full eval | gpu2 / 7g.141gb | - | Model eval DONE, baselines running | Results saved |
+| 2730 | classical baselines (3rd run) | cpu / mcore-n01 | - | 3500/8480 (41%), ~3h remaining | |
+
+**DDIM Evaluation Results — trajectory_full @ Epoch 133**:
+
+| Metric | Value |
+|--------|-------|
+| RMSE (all pixels) | 37.25 +/- 16.9 dBm |
+| MAE (all pixels) | 30.83 +/- 17.1 dBm |
+| SSIM (all pixels) | 0.635 +/- 0.166 |
+| Trajectory RMSE (observed) | **11.06 dBm** |
+| Blind Spot RMSE (unobserved) | 37.31 dBm |
+| SSIM (observed) | 0.994 |
+| SSIM (unobserved) | 0.638 |
+| Per-sample RMSE range | 4.3 — 104.6 dBm |
+
+Full results: `experiments/eval_results/trajectory_full_epoch133/`
+
+**Assessment**: Model learns structure (building outlines, corridor patterns) but signal intensity often wrong, especially near TX. 11 dBm trajectory RMSE promising. 37 dBm all-pixel dominated by building pixels — need free-space breakdown. High per-sample variance (std=16.9) = under-trained. Must continue to 200 epochs.
 
 **Val/loss trajectory for job 2707 (trajectory_full)**:
 - Epoch 0: 1.000 → Epoch 10: 0.912 → Epoch 20: 0.314 → Epoch 30: 0.0811
 - Epoch 40: 0.0255 → Epoch 50: 0.0107 → Epoch 60: 0.00684 → Epoch 72: 0.00574
-- Epoch 100: 0.00507 → Epoch 126: 0.00474
-- Still declining ~0.3%/epoch, projected ~0.0037-0.0042 by epoch 200
-- Physics warmup gradient spike at epoch 48-49 (max grad 0.09) handled gracefully by gradient clipping
+- Epoch 100: 0.00507 → Epoch 126: 0.00474 → Epoch 133: 0.00467
+- Still declining at cutoff — model has not converged
 
 **val/loss gap analysis**:
 - trajectory_full (0.00474) vs uniform_baseline (0.00335) = 41% higher
 - This is EXPECTED: coverage-weighted training + physics losses optimize different objective than val/loss
 - val/loss is noise prediction MSE; actual quality requires DDIM eval in dBm
 - Initial HealthCheck loss: trajectory_full=0.0517, baselines=0.4982 (10x gap from coverage weighting)
-
-**Classical baselines (Job 2727) — all-pixel results (MISLEADING)**:
-- Best: RBF Multiquadric = 40.16 dBm RMSE, 0.446 SSIM
-- These numbers are inflated by ~35 dBm from building pixels (70% of image)
-- Free-space RMSE estimated ~7 dBm (awaiting per-region results from Job 2728)
-- See `docs/metrics.md` "Fair Evaluation Methodology" for details
-
-**Time estimates**:
-- trajectory_full (2707): timeout ~Feb 17 16:00, needs resume for remaining ~73 epochs
-- trajectory_baseline (2725): timeout ~Feb 18 10:00, needs resume
-- uniform_baseline (2726): timeout ~Feb 18 10:00, needs resume
-- classical baselines (2728): ~5h total on mcore-n01
 
 ### Wave 1 (INVALID — pre-audit code, all checkpoints discarded)
 

@@ -6,16 +6,31 @@
 **Tests:** 199 passing (9 test files)
 **Code:** All CVPR audit fixes applied (24 fixes across 14 files)
 
+### First DDIM Evaluation Results — trajectory_full @ Epoch 133
+
+Evaluated via job 2729 on 7g.141gb (50-step DDIM, 8480 test samples). Full results in `experiments/eval_results/trajectory_full_epoch133/`.
+
+| Metric | Value | Notes |
+|--------|-------|-------|
+| **RMSE (all pixels)** | 37.25 +/- 16.9 dBm | Includes buildings (~70% of pixels) |
+| **MAE (all pixels)** | 30.83 +/- 17.1 dBm | |
+| **SSIM (all pixels)** | 0.635 +/- 0.166 | |
+| **Trajectory RMSE (observed)** | **11.06 dBm** | At trajectory sample points |
+| **Blind Spot RMSE (unobserved)** | 37.31 dBm | All non-trajectory pixels (incl. buildings) |
+| **SSIM (observed)** | 0.994 | Near-perfect at observed points |
+
+**Assessment**: Model IS learning structure (building outlines, corridor patterns visible). 11 dBm trajectory RMSE is promising. However, 37 dBm all-pixel RMSE is still high — only ~6 dBm better than dataset-mean baseline (~43 dBm). Error maps show signal overestimation near TX (bright blobs instead of fine corridor propagation). High per-sample variance (std=16.9, range 4-105 dBm) indicates under-training. Model needs to reach 200 epochs.
+
+**Missing**: Free-space vs building RMSE breakdown (evaluate.py TODO). The 37 dBm blind spot RMSE is dominated by building pixels.
+
 ### Active Jobs
 
-| Job | Experiment | Resource | Epoch | val/loss | ETA |
-|-----|-----------|----------|-------|----------|-----|
-| 2707 | trajectory_full | 7g.141gb GPU | 127/200 | 0.00474 | ~3h to timeout, needs resume |
-| 2725 | trajectory_baseline | 2g.35gb GPU | 29/200 | 0.00376 | ~30h to timeout, needs resume |
-| 2726 | uniform_baseline | 2g.35gb GPU | 36/200 | 0.00335 | ~30h to timeout, needs resume |
-| 2728 | classical baselines (re-run) | CPU (mcore-n01) | - | - | ~5h, with per-region metrics |
-
-All 4 SLURM job slots occupied. Job 2727 (original baselines) completed evaluation but crashed before saving JSON due to a Path import bug (now fixed). Job 2728 re-runs with per-region dBm metrics.
+| Job | Experiment | Resource | Progress | Status |
+|-----|-----------|----------|----------|--------|
+| 2729 | trajectory_full eval + baselines | 7g.141gb GPU | Model eval done, baselines running | Step 2 in progress |
+| 2730 | classical baselines (standalone) | CPU (mcore-n01) | ~3500/8480 (41%) | ~3h remaining |
+| 2725 | trajectory_baseline train | 2g.35gb GPU | Epoch 37/200 | ~24h to timeout |
+| 2726 | uniform_baseline train | 2g.35gb GPU | Epoch 46/200 | ~24h to timeout |
 
 ### val/loss Gap Explanation
 
@@ -27,49 +42,37 @@ trajectory_full's higher val/loss (0.00474 vs 0.00335 for uniform_baseline) is *
 
 ---
 
-## Immediate TODO (when jobs finish)
+## Immediate TODO
 
-### 1. Classical Baselines Complete (~5h) — Job 2728
-- Results will be in `experiments/eval_results/baselines.json`
-- Now includes **per-region dBm metrics**: free-space, building, observed, unobserved, free-unobserved
-- **Fair comparison metric**: Free-space RMSE (baselines don't get building map)
-- **Key research metric**: Free-space unobserved RMSE (extrapolation quality)
-- Do NOT compare all-pixel RMSE directly — 70% is buildings where baselines are structurally blind
-- See `docs/metrics.md` "Fair Evaluation Methodology" section for details
-
-### 2. GPU Jobs Timeout (~48h)
-All three GPU jobs will hit the 48h wall time before reaching 200 epochs.
-
-**Resume procedure:**
+### 1. Resume trajectory_full Training (epochs 133 → 200)
+Job 2707 timed out at epoch 135 (48h). Best checkpoint: `epoch=133-val_loss=0.0047.ckpt`. val/loss still decreasing — needs more training.
 ```bash
-# Remove FRESH flag — let it find last.ckpt automatically
+# Resume from last.ckpt (no FRESH flag)
 bash scripts/submit_experiment.sh trajectory_full 7g.141gb
-bash scripts/submit_experiment.sh trajectory_baseline 2g.35gb
-bash scripts/submit_experiment.sh uniform_baseline 2g.35gb
 ```
+Submit once 7g.141gb slot frees up (after job 2729 finishes).
 
-### 2.5. Early Evaluation (before 200 epochs)
-**val/loss is NOT the quality metric.** To know if the model needs more training, run DDIM evaluation on the current best checkpoint:
-```bash
-# Evaluate trajectory_full at current best (epoch 124)
-python scripts/evaluate.py \
-    checkpoint=experiments/trajectory_full/2026-02-15_13-00-26/checkpoints/epoch=124-val_loss=0.0048.ckpt \
-    max_samples=500
-```
-This runs 50-step DDIM sampling and computes actual dBm RMSE. If RMSE is still high, continue training. If it's plateaued, 200 epochs may be enough.
+### 2. Classical Baselines (jobs 2729 step 2 + 2730)
+- Job 2730 standalone baselines: ~3h remaining, results → `experiments/eval_results/baselines.json`
+- Job 2729 also runs baselines after model eval (redundant but ensures completion)
+- Includes **per-region dBm metrics**: free-space, building, observed, unobserved, free-unobserved
+- **Fair comparison metric**: Free-space RMSE (baselines don't get building map)
+- See `docs/metrics.md` "Fair Evaluation Methodology" for details
 
-### 3. After Core Training Completes (200 epochs)
+### 3. Add Free-Space/Building RMSE to evaluate.py
+**Critical TODO before final eval.** Current evaluate.py only computes all-pixel and observed/unobserved metrics. Need to add:
+- `rmse_free_space` — RMSE on non-building pixels only
+- `rmse_building` — RMSE on building pixels only
+- `rmse_free_space_unobserved` — key research metric (extrapolation in walkable blind spots)
+This is needed to match the per-region metrics in `run_baselines.py`.
+
+### 4. After Core Training Completes (200 epochs)
 ```bash
-# Evaluate best checkpoints (all per-region metrics)
+# Evaluate best checkpoints (with per-region metrics once added)
 python scripts/evaluate.py checkpoint=experiments/trajectory_full/<date>/checkpoints/best.ckpt
 python scripts/evaluate.py checkpoint=experiments/trajectory_baseline/<date>/checkpoints/best.ckpt
 python scripts/evaluate.py checkpoint=experiments/uniform_baseline/<date>/checkpoints/best.ckpt
-
-# Compare against classical baselines (with significance testing)
-python scripts/run_baselines.py --reference-results experiments/eval_results/trajectory_full.json
 ```
-
-**NOTE**: `evaluate.py` also needs per-region (free-space/building) dBm metrics added to match the baselines script. TODO: add building mask evaluation to evaluate.py before final eval.
 
 ---
 

@@ -255,17 +255,27 @@ Each trajectory produces: `[(t, x, y, rss), ...]` with optional noise injection.
 
 ## Current Focus
 
-**Phase**: GPU Training (v0.4.0) | Post-CVPR-audit, fresh training wave
+**Phase**: GPU Training (v0.4.0) | Post-CVPR-audit, first eval results in
 
-### Active Jobs (Feb 16, 2026):
-| Job | Experiment | Resource | Batch | Status |
-|-----|-----------|----------|-------|--------|
-| 2707 | trajectory_full | gpu2 / 7g.141gb | 32 x accum=2 | Epoch ~73/200, val/loss=0.00574, ~21 min/epoch |
-| 2725 | trajectory_baseline | gpu2 / 2g.35gb | 8 x accum=2 | Epoch 0/200, ~35 min/epoch |
-| 2726 | uniform_baseline | gpu2 / 2g.35gb | 8 x accum=2 | Epoch 0/200, ~28 min/epoch |
-| 2727 | classical baselines | cpu / mcore-n01 | - | 8480 test samples, ~2.2s/sample, ~5h total |
+### First Eval Results — trajectory_full @ Epoch 133/200
+- RMSE (all pixels): 37.25 dBm | Trajectory RMSE (observed): 11.06 dBm
+- SSIM (all): 0.635 | SSIM (observed): 0.994
+- Model learns structure but needs more training (133/200 epochs, val/loss still declining)
+- Full results: `experiments/eval_results/trajectory_full_epoch133/`
 
-All FRESH=1 (post-CVPR-audit code). Previous Wave 1 jobs (2683-2686) used pre-audit code and are **invalid**.
+### Active Jobs (Feb 17, 2026):
+| Job | Experiment | Resource | Status |
+|-----|-----------|----------|--------|
+| 2729 | trajectory_full eval + baselines | gpu2 / 7g.141gb | Model eval done, baselines in progress |
+| 2730 | classical baselines | cpu / mcore-n01 | ~41% complete, ~3h remaining |
+| 2725 | trajectory_baseline train | gpu2 / 2g.35gb | Epoch 37/200, val/loss=0.0034 |
+| 2726 | uniform_baseline train | gpu2 / 2g.35gb | Epoch 46/200, val/loss=0.00312 |
+
+### Immediate TODO:
+1. Resume trajectory_full training (133→200 epochs) when 7g.141gb frees up
+2. Add free-space/building RMSE breakdown to `evaluate.py`
+3. Wait for classical baselines, compare
+4. Resume trajectory_baseline and uniform_baseline after timeout
 
 ### Remaining Experiment Queue:
 - **Ablations**: no_physics_loss, no_coverage_attention, no_trajectory_mask, no_coverage_density, no_tx_position
@@ -273,11 +283,3 @@ All FRESH=1 (post-CVPR-audit code). Previous Wave 1 jobs (2683-2686) used pre-au
 - **Cross-eval**: traj_to_uniform, uniform_to_traj
 - **DL baselines**: supervised_unet, radio_unet, rmdm_baseline
 - **Extras**: ablation_small_unet, num_trajectories_sweep
-
-### After Training Completes:
-1. Review classical baseline results: `experiments/eval_results/baselines.json`
-2. Resume GPU jobs after 48h timeout (checkpoint resume, no FRESH flag)
-3. Evaluate best checkpoints: `python scripts/evaluate.py checkpoint=<path>`
-4. Submit ablation wave (2 at a time on 2g.35gb)
-5. Analyze uncertainty + generate figures
-6. Write paper
