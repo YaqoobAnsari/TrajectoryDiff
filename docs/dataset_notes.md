@@ -126,6 +126,26 @@ This is exactly the trajectory vs. uniform sampling distinction we're modeling.
 }
 ```
 
+## Evaluation Notes
+
+- Test set: 106 maps x 80 TX = **8,480 samples**
+- Classical baseline evaluation takes ~5h on CPU (mcore-n01, 32 cores)
+- Diffusion model evaluation takes ~46 min on 7g.141gb or ~2h on 2g.35gb
+- Results saved to `experiments/eval_results/`
+
+### Building Pixel Dominance (paper-critical)
+
+RadioMapSeer building maps are **~60-80% building pixels** (city blocks). Inside buildings, the ray-tracer computes moderate signal (~-144 dBm, PNG ~77). In free space (streets), signal is very weak (~-184 dBm, PNG ~2).
+
+**Impact on RMSE**: Classical baselines only observe free-space trajectory data (~-184 dBm). When extrapolating to buildings, they predict ~-184 dBm where ground truth is ~-144 dBm — a ~40 dBm gap across 70% of pixels. This dominates the all-pixel RMSE.
+
+**For fair evaluation**, compute RMSE separately on:
+- Free-space pixels (fair: same info for all methods)
+- Building pixels (shows building map value)
+- Free-space unobserved (extrapolation quality — key research metric)
+
+See `docs/metrics.md` for full methodology.
+
 ---
 
-*Analysis completed: 2026-02-03*
+*Last updated: 2026-02-16*

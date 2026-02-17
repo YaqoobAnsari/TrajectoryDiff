@@ -52,7 +52,7 @@ Estimated fix time: 7-10 days for all critical issues, 3-5 additional days for m
   ```
   Alternative: detach the `sqrt(1/alpha_bar - 1)` scaling factor to prevent gradient amplification, letting physics losses provide signal only through a straight-through path.
 
-### C3: Missing SOTA Deep Learning Baselines
+### C3: Missing SOTA Deep Learning Baselines — **RESOLVED** (Feb 17, 2026)
 - **Source**: eval-reviewer
 - **File**: `scripts/run_baselines.py` (entire file)
 - **Issue**: Only compares against classical interpolation (IDW, RBF, Kriging, NN). No comparison to deep learning methods. CVPR reviewers will immediately ask: "Why diffusion over a supervised U-Net, cGAN, conditional VAE, or Neural Processes?"
@@ -60,6 +60,12 @@ Estimated fix time: 7-10 days for all critical issues, 3-5 additional days for m
   1. **Supervised U-Net baseline**: Reuse existing UNet, train with MSE loss (direct sparse_rss -> radio_map regression). Minimal new code.
   2. **RadioUNet** (Levie et al., 2021): Domain-specific SOTA for radio map completion.
   3. Optionally: conditional VAE or Neural Process baseline for uncertainty comparison.
+- **Resolution**: All three baselines implemented:
+  1. `src/models/baselines/supervised_unet.py` — SupervisedUNetBaseline (same arch, direct MSE)
+  2. `src/models/baselines/radio_unet.py` — RadioUNetBaseline (standalone UNet, Levie 2021)
+  3. `src/models/baselines/rmdm.py` — RMDMBaseline (dual-UNet diffusion, Xu 2025)
+  - Configs: `experiment=supervised_unet`, `experiment=radio_unet`, `experiment=rmdm_baseline`
+  - `train.py` factory dispatches on `model_type` field; `evaluate.py` auto-detects from checkpoint
 
 ### C4: No Statistical Significance Testing
 - **Source**: eval-reviewer
@@ -313,7 +319,7 @@ The following were audited and confirmed correct:
 8. **Fix M3** (explicit configs) — Add physics weights to 6 config files. ~1 hour
 
 ### Phase 2: Baselines & Evaluation (Days 3-6)
-9. **Fix C3** (DL baselines) — Implement supervised U-Net baseline, potentially RadioUNet. ~2 days
+9. **~~Fix C3~~** ~~(DL baselines)~~ — **DONE**: Supervised UNet, RadioUNet, RMDM all implemented (Feb 17). ~2 days
 10. **Fix C4** (statistical tests) — Add paired tests, bootstrap CIs, p-values. ~0.5 day
 11. **Fix C6** (diversity metrics) — Add FID or intra-sample diversity. ~1 day
 12. **Fix M10** (per-region SSIM/PSNR) — Add masked metrics. ~0.5 day

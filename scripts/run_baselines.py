@@ -19,6 +19,7 @@ from pathlib import Path
 
 import numpy as np
 from scipy import stats
+from skimage.metrics import structural_similarity
 from tqdm import tqdm
 
 # Add src to path
@@ -110,7 +111,6 @@ def evaluate_baselines(
     # C3: Add supervised U-Net if checkpoint provided
     supervised_model = None
     if supervised_checkpoint and TORCH_AVAILABLE:
-        from pathlib import Path
         ckpt_path = Path(supervised_checkpoint)
         if ckpt_path.exists():
             print(f"Loading supervised U-Net from {supervised_checkpoint}")
@@ -140,6 +140,11 @@ def evaluate_baselines(
     results = {name: {
         "rmse": [], "mae": [], "ssim": [], "rmse_observed": [], "rmse_unobserved": [],
         "rmse_dbm": [], "mae_dbm": [], "rmse_observed_dbm": [], "rmse_unobserved_dbm": [],
+        # Per-region dBm metrics (fair comparison)
+        "rmse_free_space_dbm": [], "rmse_building_dbm": [],
+        "mae_free_space_dbm": [], "mae_building_dbm": [],
+        "rmse_free_unobs_dbm": [], "rmse_free_obs_dbm": [],
+        "ssim_free_space": [],
     } for name in all_baseline_names}
     timing = {name: 0.0 for name in all_baseline_names}
 
@@ -171,6 +176,14 @@ def evaluate_baselines(
             gt = batch["radio_map"][i, 0].numpy()
             sparse_rss = batch["sparse_rss"][i, 0].numpy()
             traj_mask = batch["trajectory_mask"][i, 0].numpy()
+            building_map = batch["building_map"][i, 0].numpy()
+
+            # Region masks (building_map in [-1,1]: >0 = free space, <=0 = building)
+            free_space_mask = building_map > 0.0
+            building_mask = ~free_space_mask
+            obs_mask = traj_mask > 0.5
+            free_obs_mask = free_space_mask & obs_mask
+            free_unobs_mask = free_space_mask & ~obs_mask
 
             # Evaluate classical baselines
             for name, baseline in baselines.items():
@@ -199,17 +212,48 @@ def evaluate_baselines(
                 diff_dbm = pred_dbm - gt_dbm
                 results[name]["rmse_dbm"].append(float(np.sqrt(np.mean(diff_dbm ** 2))))
                 results[name]["mae_dbm"].append(float(np.mean(np.abs(diff_dbm))))
-                if traj_mask.any():
-                    obs_mask = traj_mask > 0.5
-                    unobs_mask = traj_mask <= 0.5
-                    if obs_mask.any():
-                        results[name]["rmse_observed_dbm"].append(
-                            float(np.sqrt(np.mean(diff_dbm[obs_mask] ** 2)))
-                        )
-                    if unobs_mask.any():
-                        results[name]["rmse_unobserved_dbm"].append(
-                            float(np.sqrt(np.mean(diff_dbm[unobs_mask] ** 2)))
-                        )
+
+                # Per-region dBm metrics
+                if free_space_mask.any():
+                    results[name]["rmse_free_space_dbm"].append(
+                        float(np.sqrt(np.mean(diff_dbm[free_space_mask] ** 2)))
+                    )
+                    results[name]["mae_free_space_dbm"].append(
+                        float(np.mean(np.abs(diff_dbm[free_space_mask])))
+                    )
+                    # SSIM on free-space dBm
+                    fs_pred = pred_dbm.copy()
+                    fs_gt = gt_dbm.copy()
+                    # Mask buildings to zero for SSIM (only free space matters)
+                    fs_pred[building_mask] = 0.0
+                    fs_gt[building_mask] = 0.0
+                    ssim_fs = structural_similarity(
+                        fs_gt, fs_pred, data_range=139.0,
+                    )
+                    results[name]["ssim_free_space"].append(float(ssim_fs))
+                if building_mask.any():
+                    results[name]["rmse_building_dbm"].append(
+                        float(np.sqrt(np.mean(diff_dbm[building_mask] ** 2)))
+                    )
+                    results[name]["mae_building_dbm"].append(
+                        float(np.mean(np.abs(diff_dbm[building_mask])))
+                    )
+                if obs_mask.any():
+                    results[name]["rmse_observed_dbm"].append(
+                        float(np.sqrt(np.mean(diff_dbm[obs_mask] ** 2)))
+                    )
+                if (~obs_mask).any():
+                    results[name]["rmse_unobserved_dbm"].append(
+                        float(np.sqrt(np.mean(diff_dbm[~obs_mask] ** 2)))
+                    )
+                if free_obs_mask.any():
+                    results[name]["rmse_free_obs_dbm"].append(
+                        float(np.sqrt(np.mean(diff_dbm[free_obs_mask] ** 2)))
+                    )
+                if free_unobs_mask.any():
+                    results[name]["rmse_free_unobs_dbm"].append(
+                        float(np.sqrt(np.mean(diff_dbm[free_unobs_mask] ** 2)))
+                    )
 
             # C3: Process supervised U-Net results
             if supervised_model:
@@ -225,23 +269,42 @@ def evaluate_baselines(
                 if "rmse_unobserved" in metrics:
                     results["supervised_unet"]["rmse_unobserved"].append(metrics["rmse_unobserved"])
 
-                # dBm-scale metrics
+                # dBm-scale metrics (same per-region breakdown)
                 pred_dbm = denormalize_to_dbm(pred)
                 gt_dbm = denormalize_to_dbm(gt)
                 diff_dbm = pred_dbm - gt_dbm
                 results["supervised_unet"]["rmse_dbm"].append(float(np.sqrt(np.mean(diff_dbm ** 2))))
                 results["supervised_unet"]["mae_dbm"].append(float(np.mean(np.abs(diff_dbm))))
-                if traj_mask.any():
-                    obs_mask = traj_mask > 0.5
-                    unobs_mask = traj_mask <= 0.5
-                    if obs_mask.any():
-                        results["supervised_unet"]["rmse_observed_dbm"].append(
-                            float(np.sqrt(np.mean(diff_dbm[obs_mask] ** 2)))
-                        )
-                    if unobs_mask.any():
-                        results["supervised_unet"]["rmse_unobserved_dbm"].append(
-                            float(np.sqrt(np.mean(diff_dbm[unobs_mask] ** 2)))
-                        )
+                if free_space_mask.any():
+                    results["supervised_unet"]["rmse_free_space_dbm"].append(
+                        float(np.sqrt(np.mean(diff_dbm[free_space_mask] ** 2)))
+                    )
+                    results["supervised_unet"]["mae_free_space_dbm"].append(
+                        float(np.mean(np.abs(diff_dbm[free_space_mask])))
+                    )
+                if building_mask.any():
+                    results["supervised_unet"]["rmse_building_dbm"].append(
+                        float(np.sqrt(np.mean(diff_dbm[building_mask] ** 2)))
+                    )
+                    results["supervised_unet"]["mae_building_dbm"].append(
+                        float(np.mean(np.abs(diff_dbm[building_mask])))
+                    )
+                if obs_mask.any():
+                    results["supervised_unet"]["rmse_observed_dbm"].append(
+                        float(np.sqrt(np.mean(diff_dbm[obs_mask] ** 2)))
+                    )
+                if (~obs_mask).any():
+                    results["supervised_unet"]["rmse_unobserved_dbm"].append(
+                        float(np.sqrt(np.mean(diff_dbm[~obs_mask] ** 2)))
+                    )
+                if free_obs_mask.any():
+                    results["supervised_unet"]["rmse_free_obs_dbm"].append(
+                        float(np.sqrt(np.mean(diff_dbm[free_obs_mask] ** 2)))
+                    )
+                if free_unobs_mask.any():
+                    results["supervised_unet"]["rmse_free_unobs_dbm"].append(
+                        float(np.sqrt(np.mean(diff_dbm[free_unobs_mask] ** 2)))
+                    )
 
             total += 1
 
@@ -274,25 +337,56 @@ def evaluate_baselines(
             summary[name]["mae_dbm_std"] = float(np.std(r["mae_dbm"]))
         if r["rmse_observed_dbm"]:
             summary[name]["rmse_observed_dbm_mean"] = float(np.nanmean(r["rmse_observed_dbm"]))
+            summary[name]["rmse_observed_dbm_std"] = float(np.nanstd(r["rmse_observed_dbm"]))
         if r["rmse_unobserved_dbm"]:
             summary[name]["rmse_unobserved_dbm_mean"] = float(np.nanmean(r["rmse_unobserved_dbm"]))
+            summary[name]["rmse_unobserved_dbm_std"] = float(np.nanstd(r["rmse_unobserved_dbm"]))
+        # Per-region aggregates
+        for key in ["rmse_free_space_dbm", "mae_free_space_dbm", "rmse_building_dbm",
+                     "mae_building_dbm", "rmse_free_obs_dbm", "rmse_free_unobs_dbm",
+                     "ssim_free_space"]:
+            if r[key]:
+                summary[name][f"{key}_mean"] = float(np.nanmean(r[key]))
+                summary[name][f"{key}_std"] = float(np.nanstd(r[key]))
 
     # Print results (dBm as primary)
-    print("\n" + "=" * 80)
-    print("BASELINE RESULTS (dBm scale)")
-    print("=" * 80)
+    print("\n" + "=" * 100)
+    print("BASELINE RESULTS — ALL PIXELS (dBm scale)")
+    print("=" * 100)
     print(f"{'Method':<25} {'RMSE(dBm)':>10} {'MAE(dBm)':>10} {'SSIM':>8} {'Time(ms)':>10}")
-    print("-" * 80)
+    print("-" * 100)
     for name, s in summary.items():
         ssim_str = f"{s.get('ssim_mean', float('nan')):.4f}"
         rmse_dbm = s.get('rmse_dbm_mean', float('nan'))
         mae_dbm = s.get('mae_dbm_mean', float('nan'))
         print(f"{name:<25} {rmse_dbm:>10.2f} {mae_dbm:>10.2f} {ssim_str:>8} {s['avg_time_ms']:>10.1f}")
 
+    print("\n" + "=" * 100)
+    print("BASELINE RESULTS — PER-REGION BREAKDOWN (dBm scale)")
+    print("=" * 100)
+    print(f"{'Method':<25} {'Free RMSE':>10} {'Bldg RMSE':>10} {'Obs RMSE':>10} {'Unobs RMSE':>12} {'FreeUnobs':>10} {'Free SSIM':>10}")
+    print("-" * 100)
+    for name, s in summary.items():
+        fs_rmse = s.get('rmse_free_space_dbm_mean', float('nan'))
+        bl_rmse = s.get('rmse_building_dbm_mean', float('nan'))
+        ob_rmse = s.get('rmse_observed_dbm_mean', float('nan'))
+        uo_rmse = s.get('rmse_unobserved_dbm_mean', float('nan'))
+        fu_rmse = s.get('rmse_free_unobs_dbm_mean', float('nan'))
+        fs_ssim = s.get('ssim_free_space_mean', float('nan'))
+        print(f"{name:<25} {fs_rmse:>10.2f} {bl_rmse:>10.2f} {ob_rmse:>10.2f} {uo_rmse:>12.2f} {fu_rmse:>10.2f} {fs_ssim:>10.4f}")
+
     print(f"\n{'Method':<25} {'RMSE(norm)':>10} {'MAE(norm)':>10}")
     print("-" * 50)
     for name, s in summary.items():
         print(f"{name:<25} {s['rmse_mean']:>10.4f} {s['mae_mean']:>10.4f}")
+
+    print("\n[Legend]")
+    print("  Free RMSE     = Free-space pixels only (streets, walkable areas)")
+    print("  Bldg RMSE     = Building pixels only")
+    print("  Obs RMSE      = Trajectory-observed pixels")
+    print("  Unobs RMSE    = All unobserved pixels")
+    print("  FreeUnobs     = Free-space unobserved (FAIR comparison metric)")
+    print("  Free SSIM     = SSIM on free-space region (dBm scale, range=139)")
 
     # C4: Compare against reference (diffusion model) if provided
     if reference_results and Path(reference_results).exists():

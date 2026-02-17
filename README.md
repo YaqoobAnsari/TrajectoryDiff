@@ -121,13 +121,13 @@ python scripts/evaluate.py checkpoint=experiments/trajectory_full/checkpoints/be
 
 ```
 TrajectoryDiff/
-├── configs/                    # Hydra configuration (16 experiment configs)
+├── configs/                    # Hydra configuration (19 experiment configs)
 ├── src/
 │   ├── data/                  # Dataset, DataModule, trajectory sampling
 │   ├── models/
 │   │   ├── diffusion/         # DDPM, UNet, CoverageAwareUNet, attention
 │   │   ├── encoders/          # TrajectoryConditionedUNet, ConditionEncoder
-│   │   └── baselines/         # IDW, RBF, Kriging, NN interpolation
+│   │   └── baselines/         # Classical (IDW, RBF) + DL (SupervisedUNet, RadioUNet, RMDM)
 │   ├── training/              # DiffusionModule, losses, inference, callbacks
 │   └── evaluation/            # RMSE, SSIM, trajectory-aware metrics (dBm)
 ├── scripts/                   # train.py, evaluate.py, smoke tests, SLURM scripts
@@ -137,18 +137,30 @@ TrajectoryDiff/
 
 ## Experiments
 
-16 experiment configurations ready for systematic evaluation:
+19 experiment configurations ready for systematic evaluation:
 
 | Category | Experiments | Description |
 |----------|-------------|-------------|
 | **Main** | `trajectory_full`, `trajectory_baseline`, `uniform_baseline` | Full model vs baselines |
+| **DL Baselines** | `supervised_unet`, `radio_unet`, `rmdm_baseline` | Deep learning comparison methods |
 | **Ablations** | `ablation_no_{coverage_attention, physics_loss, trajectory_mask, coverage_density, tx_position}`, `ablation_small_unet` | Component contribution |
 | **Cross-eval** | `cross_eval_traj_to_uniform`, `cross_eval_uniform_to_traj` | Generalization |
 | **Sweeps** | `coverage_sweep_{1,5,10,20}pct`, `num_trajectories_sweep` | Coverage effects |
 
+### DL Baselines
+
+| Baseline | Architecture | Key Difference | Reference |
+|----------|-------------|----------------|-----------|
+| **Supervised UNet** | Same as ours (TrajectoryConditionedUNet) | Direct MSE, no diffusion | Ablation |
+| **RadioUNet** | Standalone encoder-decoder UNet | Raw channel concat, no condition encoder | Levie et al., 2021 |
+| **RMDM** | Dual-UNet diffusion + anchor fusion | Physics-conductor + detail-sculptor | Xu et al., 2025 |
+
 ```bash
 # Run a specific experiment
 python scripts/train.py experiment=trajectory_full
+python scripts/train.py experiment=supervised_unet   # Supervised UNet baseline
+python scripts/train.py experiment=radio_unet         # RadioUNet baseline
+python scripts/train.py experiment=rmdm_baseline      # RMDM baseline
 
 # Run on SLURM cluster (H200 GPUs)
 sbatch scripts/run_experiments.sh trajectory_full

@@ -17,6 +17,9 @@ For trajectory-conditioned radio map generation, the **most important metric is 
 | **MSE** | mean((pred - target)²) | [0, ∞) | Lower |
 | **PSNR** | 10·log₁₀(range²/MSE) | [0, ∞) dB | Higher |
 | **SSIM** | Structural similarity | [-1, 1] | Higher |
+| **NMSE** | MSE / var(target) | [0, ∞) | Lower |
+
+**Note:** Published SOTA on RadioMapSeer (RadioUNet, RadioDiff, RMDM) reports NMSE and normalized RMSE. Our evaluation computes both normalized-space and dBm-scale metrics. SSIM is computed on dBm scale with skimage sliding window (fixed in CVPR audit).
 
 ### Trajectory-Aware Metrics (Our Focus)
 
@@ -90,13 +93,66 @@ psnr = compute_psnr(samples, ground_truth)
    - If unobserved >> observed: Model struggles with extrapolation
    - If unobserved ≈ observed: Good generalization
 
-2. **TrajectoryDiff vs Baselines**:
+2. **TrajectoryDiff vs Classical Baselines**:
    - Our hypothesis: TrajectoryDiff should excel on RMSE_unobserved
    - Uniform-sampling methods should struggle on trajectory-sampled data
+   - Fair comparison: free-space RMSE only (classical baselines lack building map)
 
-3. **Distance-based RMSE**:
+3. **TrajectoryDiff vs DL Baselines**:
+   - vs Supervised UNet: Shows value of diffusion process (same arch, same conditioning)
+   - vs RadioUNet: Shows value of learned ConditionEncoder + coverage density + trajectory mask
+   - vs RMDM: Shows value of coverage-aware attention vs anchor fusion approach
+   - All DL baselines receive building map — all-pixel RMSE is fair between DL methods
+
+4. **Distance-based RMSE**:
    - Error should increase with distance from samples
    - Trajectory-aware models should show slower increase
+
+## Fair Evaluation Methodology (Paper-Critical)
+
+### Information Available to Each Method
+
+| Method | Building Map | Sparse RSS | Trajectory Mask | Coverage Density | TX Position |
+|--------|:-----------:|:----------:|:--------------:|:----------------:|:-----------:|
+| Classical (IDW, RBF, NN) | No | Yes | Yes | No | No |
+| RadioUNet | Yes (as input channel) | Yes | Yes | No | Yes (distance map) |
+| Supervised UNet | Yes | Yes | Yes | Yes | Yes |
+| RMDM | Yes (via conductor) | Yes | Yes | Yes | Yes |
+| TrajectoryDiff (ours) | Yes | Yes | Yes | Yes | Yes |
+
+### The Building Pixel Problem
+
+Classical baselines (IDW, RBF, NN) do NOT receive the building map as input — they only get sparse trajectory observations. The diffusion model and DL baselines receive the building map as a conditioning input. This creates an unfair advantage when evaluating over all pixels:
+
+- **~70% of pixels are buildings** where baselines have zero information
+- **Ground truth in buildings**: ~-144 dBm (moderate signal from ray-tracing penetration)
+- **Baseline predictions in buildings**: ~-184 dBm (extrapolated from weak free-space observations)
+- **Result**: ~40 dBm error in buildings dominates the all-pixel RMSE
+
+### Per-Region Metrics (required for fair comparison)
+
+| Metric | What It Measures | Fair? |
+|--------|-----------------|-------|
+| **RMSE (all pixels)** | Full image reconstruction quality | Unfair — building map advantage |
+| **RMSE (free-space only)** | Interpolation/extrapolation in walkable areas | **Fair** — same info available |
+| **RMSE (building only)** | Building interior estimation | Shows building map value |
+| **RMSE (observed)** | Accuracy at trajectory points | Baseline sanity check |
+| **RMSE (unobserved)** | Extrapolation quality | Key research metric |
+| **RMSE (free-space unobserved)** | Extrapolation in walkable blind spots | **Fairest comparison** |
+
+### For the Paper
+
+1. **Primary comparison metric**: Free-space RMSE (both methods have same information)
+2. **Key research metric**: Free-space unobserved RMSE (extrapolation into blind spots)
+3. **Report all-pixel RMSE** too, but note the building map advantage in text
+4. **Building RMSE** shows the value of incorporating building maps (our advantage)
+5. **Do NOT compare** with published SOTA (RMDM, RadioDiff) — they use dense observation, completely different protocol
+
+### Coverage Context
+
+- Trajectory coverage: ~300 points / 65,536 pixels = **~0.5% of total map**
+- Free-space coverage: ~300 / ~19,000 free pixels = **~1.6% of walkable area**
+- This is far sparser than typical radio map prediction papers (which use 1-10% uniform)
 
 ## Implementation Details
 

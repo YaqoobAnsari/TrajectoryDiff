@@ -9,6 +9,7 @@
 6. [Current Limitations](#limitations)
 7. [CoverageAwareUNet (Novel)](#coverage-unet)
 8. [Physics-Informed Losses](#physics-losses)
+9. [Deep Learning Baselines](#dl-baselines)
 
 ---
 
@@ -642,10 +643,10 @@ All experiments are on RadioMapSeer (simulation). Real indoor environments may d
 ### Limitation 4: Computational Cost
 
 Diffusion models are slow:
-- Training: 10-20 hours on GPU
-- Inference: 1-2 seconds per sample (with DDIM)
+- Training: ~70h for 200 epochs on H200 7g.141gb (trajectory_full), ~93-117h on 2g.35gb
+- Inference: ~1.3s/batch on 7g.141gb, ~3.5s/batch on 2g.35gb (with DDIM 50 steps)
 
-**Mitigation:** DDIM already helps. Could explore consistency models for faster sampling.
+**Mitigation:** DDIM already reduces sampling from 1000 to 50 steps. Could explore consistency models for faster sampling.
 
 ---
 
@@ -663,19 +664,22 @@ class CoverageAwareAttentionBlock(nn.Module):
     Replaces standard AttentionBlock in the UNet.
 
     1. Receives coverage density (downsampled to match feature resolution)
-    2. Modulates attention weights via a learned coverage gate
-    3. High-coverage keys get higher attention (trust observed data)
-    4. Low-coverage keys get lower attention (explore blind spots)
+    2. Learns an additive log-bias from coverage density
+    3. Adds bias to attention logits BEFORE softmax
+    4. High-coverage keys get higher attention (trust observed data)
+    5. Low-coverage keys get lower attention (explore blind spots)
     """
 
     def forward(self, x, coverage=None):
         # Standard self-attention: Q, K, V projections
         attn = Q @ K.T / sqrt(d_k)
 
-        # NOVEL: Coverage modulation
+        # NOVEL: Additive log-bias from coverage density
+        # (Multiplicative gates cancel in softmax if uniform —
+        #  additive bias in log-space survives softmax normalization)
         if coverage is not None:
-            coverage_gate = sigmoid(linear(coverage))  # Learned per-head scaling
-            attn = attn * coverage_gate  # Boost attention to high-coverage keys
+            log_bias = coverage_bias_net(coverage)  # Learned per-head bias
+            attn = attn + log_bias  # Add before softmax
 
         attn = softmax(attn)
         return attn @ V
@@ -738,6 +742,96 @@ When False, standard MSE only (for ablation comparison).
 
 ---
 
+## 9. Deep Learning Baselines <a name="dl-baselines"></a>
+
+Three DL baselines are implemented for fair comparison, isolating the contributions of diffusion modeling, our conditioning pipeline, and the dual-UNet architecture.
+
+### Supervised UNet (`src/models/baselines/supervised_unet.py`)
+
+**Purpose**: Same architecture as TrajectoryDiff (TrajectoryConditionedUNet), but trained with direct MSE loss instead of diffusion. Shows the value of the diffusion process itself.
+
+```
+Input: building_map + sparse_rss + trajectory_mask + coverage_density + tx_position
+   → ConditionEncoder → condition (64ch)
+   → Concat with zeros (dummy x_t) → UNet → predicted radio map
+Loss: MSE(prediction, ground_truth)
+```
+
+- Uses dummy `x_t = 0` and `t = 0` (no noise, no diffusion)
+- Same ConditionEncoder, same UNet backbone, same parameter count
+- Single forward pass at inference (no iterative sampling)
+- Config: `experiment=supervised_unet`, `model_type=supervised`
+
+### RadioUNet (`src/models/baselines/radio_unet.py`)
+
+**Purpose**: Published baseline (Levie et al., 2021) adapted to our sparse-trajectory setting. Shows the value of our learned ConditionEncoder and trajectory-specific conditioning.
+
+```
+Input: concat(building_map, sparse_rss, trajectory_mask, tx_distance_map) = 4 channels
+   → Standalone encoder-decoder UNet → predicted radio map (1ch)
+Loss: MSE(prediction, ground_truth)
+```
+
+Key differences from our model:
+- **No ConditionEncoder** — raw 4-channel concatenation (RadioUNet style)
+- **No time embedding** — not a diffusion model, no timestep input
+- **No coverage attention** — standard self-attention only
+- **TX as distance map** — `1/(1 + dist*10)` spatial map instead of learned encoding
+- Architecture: base_channels=64, channel_mult=(1,2,4,8), attention at 32x32
+- Config: `experiment=radio_unet`, `model_type=radio_unet`
+
+### RMDM (`src/models/baselines/rmdm.py`)
+
+**Purpose**: Current SOTA on RadioMapSeer (Xu et al., 2025) adapted to sparse trajectories. Strongest comparison — dual-UNet diffusion with physics-conductor anchor fusion.
+
+```
+PhysicsConductor (small UNet):
+   Input: building_map (1ch) + tx_distance_map (1ch)
+   → Small UNet (no time embedding) → anchor map (1ch)
+   Loss: MSE(anchor, ground_truth)
+
+DetailSculptor (_AnchorFusionUNet):
+   Input: x_t (1ch) + condition (from ConditionEncoder)
+   → UNet with multiplicative anchor fusion: h = h * (1 + anchor_at_resolution)
+   → Anchor is F.interpolate'd to match each resolution level
+   Loss: Standard diffusion noise prediction MSE
+
+Total loss = diffusion_loss + 0.1 * conductor_loss
+```
+
+Key innovations from RMDM:
+- **Multiplicative anchor fusion** — physics-based anchor modulates features at every resolution
+- **Dual-UNet** — conductor handles physics, sculptor handles detail
+- Anchor is detached during sculptor training (no gradient flow back to conductor through sculptor)
+- Reuses our `GaussianDiffusion` and `DDIMSampler` for the diffusion process
+- Config: `experiment=rmdm_baseline`, `model_type=rmdm`
+
+### Model Type Factory (`scripts/train.py`)
+
+All models are trained via the same `train.py` script, dispatched by the `model_type` config field:
+
+```python
+# model_type → factory function
+'diffusion'  → DiffusionModule (our full model)
+'supervised' → SupervisedUNetBaseline
+'radio_unet' → RadioUNetBaseline
+'rmdm'       → RMDMBaseline
+```
+
+Diffusion-specific callbacks (WandBSampleLogger, MetricsLogger, GradientMonitor) are automatically skipped for non-diffusion models.
+
+### Evaluation (`scripts/evaluate.py`)
+
+The evaluation script auto-detects model type from checkpoint state_dict keys:
+- `conductor.*` → RMDM
+- `encoder_blocks.*` → RadioUNet
+- `diffusion.*` → Diffusion (our model)
+- `model.*` → Supervised UNet
+
+Non-diffusion models use single forward pass; diffusion models (ours + RMDM) use DDIM sampling.
+
+---
+
 ## Quick Reference: File Locations
 
 | Component | File |
@@ -753,7 +847,12 @@ When False, standard MSE only (for ablation comparison).
 | **Physics losses** | `src/training/losses.py` |
 | Inference | `src/training/inference.py` |
 | Metrics | `src/evaluation/metrics.py` |
+| **Supervised UNet baseline** | `src/models/baselines/supervised_unet.py` |
+| **RadioUNet baseline** | `src/models/baselines/radio_unet.py` |
+| **RMDM baseline** | `src/models/baselines/rmdm.py` |
+| Classical baselines | `src/models/baselines/interpolation.py` |
 | Train script | `scripts/train.py` |
 | Eval script | `scripts/evaluate.py` |
+| Baselines eval script | `scripts/run_baselines.py` |
 | Smoke test | `scripts/smoke_test_quick.py` |
 | SLURM launcher | `scripts/run_experiments.sh` |

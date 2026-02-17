@@ -145,6 +145,7 @@ class RBFBaseline:
         kernel: str = 'thin_plate_spline',
         smoothing: float = 0.0,
         max_samples: int = 1000,
+        epsilon: Optional[float] = None,
     ):
         """
         Args:
@@ -152,11 +153,13 @@ class RBFBaseline:
                    'inverse_multiquadric', 'gaussian', 'linear', 'cubic')
             smoothing: Smoothing parameter (0 = exact interpolation)
             max_samples: Maximum samples to use (for speed)
+            epsilon: Shape parameter required for 'multiquadric', 'gaussian', etc.
         """
         self.name = f"rbf_{kernel}"
         self.kernel = kernel
         self.smoothing = smoothing
         self.max_samples = max_samples
+        self.epsilon = epsilon
 
     def __call__(
         self,
@@ -193,11 +196,10 @@ class RBFBaseline:
 
         # Create interpolator
         points = np.column_stack([x_samples, y_samples])
-        interpolator = RBFInterpolator(
-            points, values,
-            kernel=self.kernel,
-            smoothing=self.smoothing
-        )
+        rbf_kwargs = dict(kernel=self.kernel, smoothing=self.smoothing)
+        if self.epsilon is not None:
+            rbf_kwargs['epsilon'] = self.epsilon
+        interpolator = RBFInterpolator(points, values, **rbf_kwargs)
 
         # Create query grid
         xx, yy = np.meshgrid(np.arange(W), np.arange(H))
@@ -395,7 +397,7 @@ def get_all_baselines() -> dict:
         'idw': IDWBaseline(power=2.0),
         'idw_p3': IDWBaseline(power=3.0),
         'rbf_tps': RBFBaseline(kernel='thin_plate_spline'),
-        'rbf_multiquadric': RBFBaseline(kernel='multiquadric'),
+        'rbf_multiquadric': RBFBaseline(kernel='multiquadric', epsilon=1.0),
         'distance_transform': DistanceTransformBaseline(),
         # Kriging is slow, use sparingly
         # 'kriging': KrigingBaseline(),
