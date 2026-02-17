@@ -9,8 +9,9 @@
 **Novelty Claims**:
 1. First diffusion model for trajectory-to-map generation (vs. random-sparse-to-dense)
 2. First to explicitly model spatial sampling bias in radio map prediction
-3. Novel trajectory encoder capturing temporal correlation and coverage patterns
-4. Uncertainty-aware generation with proper calibration for blind spots
+3. Coverage-aware attention mechanism modulating diffusion by observation density
+4. Physics-informed losses with warmup schedule for stable training
+5. Uncertainty-aware generation with proper calibration for blind spots
 
 ---
 
@@ -18,837 +19,200 @@
 
 | Phase | Status | Tests | Key Files |
 |-------|--------|-------|-----------|
-| Phase 0: Setup | ✅ Complete | - | configs/, environment.yaml |
-| Phase 1: Data Pipeline | ✅ Complete | 13 tests | src/data/ |
-| Phase 2: Model Development | ✅ Complete | 88 tests | src/models/, src/training/ |
-| Phase 3: Physics + Architecture | ✅ Complete | 98 new tests | losses.py, coverage_unet.py, attention.py |
-| Phase 4: Experiments | 🔄 TRAINING (Wave 1 running) | - | 16 experiment configs, SLURM scripts, analysis scripts |
-| Phase 5: Paper Writing | ⬜ Not Started | - | - |
+| Phase 0: Setup | Done | - | configs/, environment.yaml |
+| Phase 1: Data Pipeline | Done | 13 tests | src/data/ |
+| Phase 2: Model Development | Done | 88 tests | src/models/, src/training/ |
+| Phase 3: Physics + Architecture | Done | 98 new tests | losses.py, coverage_unet.py, attention.py |
+| Phase 3.5: CVPR Audit Fixes | Done | 199 tests | 24 fixes across 14 files |
+| Phase 4: Experiments | **TRAINING** | - | 16 experiment configs, SLURM scripts |
+| Phase 5: Paper Writing | Not Started | - | - |
 
 **Total Tests: 199 passing (9 test files) | Version: v0.4.0-experiment-ready**
 
-### Phase 3 Completion Summary (Feb 2026)
+---
 
-Novel contributions implemented and integrated:
+## Training Log
 
-| Component | File | Description |
-|-----------|------|-------------|
-| CoverageAwareUNet | `src/models/diffusion/coverage_unet.py` | UNet with coverage-modulated attention (novel) |
-| CoverageAwareAttention | `src/models/diffusion/attention.py` | Attention scaled by coverage density (novel) |
-| TrajectoryDiffLoss | `src/training/losses.py` | Combined physics-informed loss |
-| Smoke Tests | `scripts/smoke_test_quick.py` | Verified with real RadioMapSeer data |
-| Experiment Configs | `configs/experiment/` | 16 configs for full experiment suite |
-| SLURM Scripts | `scripts/run_experiments.sh` | H200 GPU training scripts |
+### Wave 2 — Submitted Feb 16, 2026 ~15:42 (post-CVPR-audit code)
 
-Bug fixes applied: data normalization [-1,1], config mapping, inference params, checkpoint monitors, TX normalization.
+All jobs use FRESH=1 (no checkpoint resume from pre-audit runs).
 
-### Phase 2 Completion Summary (Feb 2026)
+| Job ID | Experiment | Partition / MIG | Batch | Status (Feb 17) | Notes |
+|--------|-----------|-----------------|-------|--------|-------|
+| 2707 | trajectory_full | gpu2 / 7g.141gb | 32 x accum=2 | Epoch 127/200, val/loss=0.00474 | ~21 min/epoch, ~3h to 48h timeout |
+| 2725 | trajectory_baseline | gpu2 / 2g.35gb | 8 x accum=2 | Epoch 29/200, val/loss=0.00376 | ~35 min/epoch, ~30h to timeout |
+| 2726 | uniform_baseline | gpu2 / 2g.35gb | 8 x accum=2 | Epoch 36/200, val/loss=0.00335 | ~28 min/epoch, ~30h to timeout |
+| 2727 | classical baselines (CPU) | cpu / mcore-n01 | - | COMPLETED (but JSON save crashed) | Path import bug — fixed |
+| 2728 | classical baselines (re-run) | cpu / mcore-n01 | - | RUNNING | With per-region dBm metrics |
 
-Implemented core model components:
+**Val/loss trajectory for job 2707 (trajectory_full)**:
+- Epoch 0: 1.000 → Epoch 10: 0.912 → Epoch 20: 0.314 → Epoch 30: 0.0811
+- Epoch 40: 0.0255 → Epoch 50: 0.0107 → Epoch 60: 0.00684 → Epoch 72: 0.00574
+- Epoch 100: 0.00507 → Epoch 126: 0.00474
+- Still declining ~0.3%/epoch, projected ~0.0037-0.0042 by epoch 200
+- Physics warmup gradient spike at epoch 48-49 (max grad 0.09) handled gracefully by gradient clipping
 
-| Component | File | Description |
-|-----------|------|-------------|
-| DDPM Core | `src/models/diffusion/ddpm.py` | GaussianDiffusion, DDIMSampler, noise schedules |
-| U-Net Backbone | `src/models/diffusion/unet.py` | Small/Medium/Large variants with attention |
-| Condition Encoder | `src/models/encoders/condition_encoder.py` | TrajectoryConditionedUNet with spatial+position encoding |
-| Training Module | `src/training/diffusion_module.py` | Lightning module with EMA, warmup+cosine LR |
-| Inference Utils | `src/training/inference.py` | DiffusionInference, uncertainty estimation |
-| Callbacks | `src/training/callbacks.py` | W&B logging, metrics, gradient monitoring |
-| Evaluation Metrics | `src/evaluation/metrics.py` | RMSE, SSIM, trajectory-aware metrics |
-| Train Script | `scripts/train.py` | Hydra-based training with W&B integration |
-| Eval Script | `scripts/evaluate.py` | Full test set evaluation with dBm-scale metrics |
+**val/loss gap analysis**:
+- trajectory_full (0.00474) vs uniform_baseline (0.00335) = 41% higher
+- This is EXPECTED: coverage-weighted training + physics losses optimize different objective than val/loss
+- val/loss is noise prediction MSE; actual quality requires DDIM eval in dBm
+- Initial HealthCheck loss: trajectory_full=0.0517, baselines=0.4982 (10x gap from coverage weighting)
+
+**Classical baselines (Job 2727) — all-pixel results (MISLEADING)**:
+- Best: RBF Multiquadric = 40.16 dBm RMSE, 0.446 SSIM
+- These numbers are inflated by ~35 dBm from building pixels (70% of image)
+- Free-space RMSE estimated ~7 dBm (awaiting per-region results from Job 2728)
+- See `docs/metrics.md` "Fair Evaluation Methodology" for details
+
+**Time estimates**:
+- trajectory_full (2707): timeout ~Feb 17 16:00, needs resume for remaining ~73 epochs
+- trajectory_baseline (2725): timeout ~Feb 18 10:00, needs resume
+- uniform_baseline (2726): timeout ~Feb 18 10:00, needs resume
+- classical baselines (2728): ~5h total on mcore-n01
+
+### Wave 1 (INVALID — pre-audit code, all checkpoints discarded)
+
+Jobs 2683-2686 ran with broken LR schedule, inverted building map convention, incorrect attention heads, and other bugs found during CVPR audit. All Wave 1 checkpoints are invalid.
 
 ---
 
-## Phase 0: Environment Setup (Week 0)
+## Published SOTA on RadioMapSeer (for reference)
 
-### Goals
-- [x] Repository structure created
-- [x] Environment configured (conda/pip)
-- [x] RadioMapSeer dataset downloaded and explored
-- [x] Basic data loading working
+These results assume **dense/full observation** (building map + TX position → predict full pathloss). Our sparse-trajectory setting is fundamentally harder.
 
-### Tasks
+| Method | NMSE | RMSE (norm) | SSIM | Source |
+|--------|------|-------------|------|--------|
+| RME-GAN | 0.0115 | 0.0303 | 0.932 | RadioDiff (2024) |
+| RadioUNet | 0.0074 | 0.0244 | 0.959 | RadioDiff (2024) |
+| RadioDiff | 0.0049 | 0.0190 | 0.969 | RadioDiff (2024) |
+| **RMDM** | **0.0031** | **0.0125** | **0.978** | RMDM (Jan 2025) |
 
-#### 0.1 Repository Setup
-```bash
-# Create repo structure
-mkdir -p trajectorydiff/{configs,src,scripts,notebooks,tests,docs,data}
-mkdir -p trajectorydiff/src/{data,models,training,evaluation,utils}
-mkdir -p trajectorydiff/configs/{model,data,training,experiment}
-```
-
-#### 0.2 Environment
-```yaml
-# environment.yaml
-name: trajdiff
-channels:
-  - pytorch
-  - nvidia
-  - conda-forge
-dependencies:
-  - python=3.10
-  - pytorch=2.1
-  - pytorch-cuda=12.1
-  - torchvision
-  - lightning=2.1
-  - hydra-core=1.3
-  - omegaconf
-  - wandb
-  - numpy
-  - scipy
-  - scikit-image
-  - matplotlib
-  - seaborn
-  - pandas
-  - h5py
-  - tqdm
-  - pytest
-  - black
-  - ruff
-  - mypy
-  - pip
-  - pip:
-    - einops
-    - timm
-```
-
-#### 0.3 Dataset Download
-- Download RadioMapSeer from IEEE DataPort
-- Verify data integrity
-- Document data format and structure
-
-### Deliverables
-- [x] Working conda environment
-- [x] Data loading script that can visualize sample radio maps
-- [x] Understanding of RadioMapSeer data format
+**IMPORTANT — NOT COMPARABLE to our results:**
+- Published SOTA uses **dense/full observation** (building map + TX position → full pathloss)
+- Our task uses **~0.5% trajectory coverage** (300 sparse points on walking paths)
+- Do NOT put these numbers in the same table as ours in the paper
+- Instead, cite them in Related Work with explicit disclaimer about evaluation protocol difference
 
 ---
 
-## Phase 1: Data Pipeline & Trajectory Simulation (Weeks 1-2) ✅ COMPLETE
+## Remaining Experiment Queue
 
-### Goals
-- [x] Trajectory sampling algorithms implemented
-- [x] Multiple trajectory types (shortest-path, random-walk, corridor-biased)
-- [x] Data augmentation pipeline
-- [x] Visualization tools for trajectories + sparse samples
+### Priority 1 — Core (needed for every table)
+- [x] trajectory_full (running — job 2707)
+- [x] trajectory_baseline (running — job 2725)
+- [x] uniform_baseline (running — job 2726)
+- [x] classical baselines (running — job 2728)
+- [x] supervised_unet baseline (wired up — `experiment=supervised_unet`)
+- [x] radio_unet baseline (implemented — `experiment=radio_unet`)
+- [x] rmdm baseline (implemented — `experiment=rmdm_baseline`)
 
-### Technical Specification
+### Priority 2 — Ablations (needed for ablation table)
+- [ ] ablation_no_physics_loss
+- [ ] ablation_no_coverage_attention
+- [ ] ablation_no_trajectory_mask
+- [ ] ablation_no_coverage_density
+- [ ] ablation_no_tx_position
 
-#### 1.1 Floor Plan Processing
+### Priority 3 — Coverage sweeps (robustness figure)
+- [ ] coverage_sweep_1pct
+- [ ] coverage_sweep_5pct
+- [ ] coverage_sweep_10pct (same as trajectory_full)
+- [ ] coverage_sweep_20pct
 
-**Input**: RGB floor plan image from RadioMapSeer
-**Output**: Binary free-space mask + material map
-
-```python
-class FloorPlanProcessor:
-    """Process raw floor plans into usable formats."""
-    
-    def extract_free_space_mask(self, floor_plan: np.ndarray) -> np.ndarray:
-        """
-        Args:
-            floor_plan: (H, W, 3) RGB image
-        Returns:
-            mask: (H, W) binary, 1 = walkable, 0 = wall/obstacle
-        """
-        pass
-    
-    def extract_material_map(self, floor_plan: np.ndarray) -> np.ndarray:
-        """
-        Returns:
-            materials: (H, W) categorical, 0=air, 1=drywall, 2=concrete, etc.
-        """
-        pass
-```
-
-#### 1.2 Trajectory Generation
-
-**Core Interface**:
-```python
-@dataclass
-class TrajectoryPoint:
-    t: float      # timestamp (seconds)
-    x: float      # x coordinate (meters or pixels)
-    y: float      # y coordinate
-    rss: float    # RSS value (dBm)
-
-Trajectory = List[TrajectoryPoint]
-
-class TrajectoryGenerator(ABC):
-    """Base class for trajectory generation strategies."""
-    
-    @abstractmethod
-    def generate(
-        self,
-        free_space_mask: np.ndarray,
-        radio_map: np.ndarray,
-        n_points: int,
-        **kwargs
-    ) -> Trajectory:
-        """Generate a single trajectory."""
-        pass
-```
-
-**Trajectory Types**:
-
-1. **ShortestPathTrajectory**
-   - Sample random start/end in free space
-   - Use A* to find path
-   - Sample points along path at fixed interval
-   - Add position noise (Gaussian, σ=0.5m)
-   - Query RSS from radio map + measurement noise (Gaussian, σ=2dB)
-
-2. **RandomWalkTrajectory**
-   - Start at random free-space point
-   - At each step: sample direction with momentum
-   - Reject steps that hit walls
-   - Continue for N steps
-   - Natural corridor-following behavior emerges
-
-3. **CorridorBiasedTrajectory**
-   - Precompute "corridor score" for each pixel (distance transform from walls)
-   - Bias sampling toward high-score regions
-   - Simulate realistic human preference for corridors
-
-#### 1.3 Sparse Sample Representation
-
-**From Trajectory to Sparse Map**:
-```python
-def trajectory_to_sparse_input(
-    trajectory: Trajectory,
-    map_shape: Tuple[int, int],
-    resolution: float  # meters per pixel
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Args:
-        trajectory: List of (t, x, y, rss) points
-        map_shape: (H, W) of output
-        resolution: meters per pixel
-    
-    Returns:
-        sparse_rss: (H, W) RSS values, 0 where no measurement
-        mask: (H, W) binary, 1 where measurement exists
-    """
-    sparse_rss = np.zeros(map_shape)
-    mask = np.zeros(map_shape)
-    
-    for point in trajectory:
-        px, py = int(point.x / resolution), int(point.y / resolution)
-        if 0 <= px < map_shape[1] and 0 <= py < map_shape[0]:
-            sparse_rss[py, px] = point.rss
-            mask[py, px] = 1.0
-    
-    return sparse_rss, mask
-```
-
-**Coverage Density Map** (for conditioning):
-```python
-def compute_coverage_density(
-    mask: np.ndarray,
-    sigma: float = 5.0  # pixels
-) -> np.ndarray:
-    """
-    Gaussian-smoothed coverage map showing sample density.
-    High values = lots of nearby samples (confident region)
-    Low values = sparse/no samples (uncertain region)
-    """
-    from scipy.ndimage import gaussian_filter
-    return gaussian_filter(mask.astype(float), sigma=sigma)
-```
-
-#### 1.4 Data Augmentation
-
-```python
-class RadioMapAugmentation:
-    """Augmentations that preserve physics consistency."""
-    
-    def random_rotation(self, floor_plan, radio_map, trajectory, angle: int):
-        """Rotate by 90/180/270 degrees."""
-        pass
-    
-    def random_flip(self, floor_plan, radio_map, trajectory, horizontal: bool):
-        """Horizontal or vertical flip."""
-        pass
-    
-    def random_crop(self, floor_plan, radio_map, trajectory, crop_size: int):
-        """Random crop (trajectory points outside crop are dropped)."""
-        pass
-    
-    # NOTE: We do NOT scale RSS values - they are physics quantities
-```
-
-### Deliverables
-- [x] `src/data/trajectory_sampler.py` with all trajectory types
-- [x] `src/data/transforms.py` with augmentations
-- [x] Visualization notebook showing trajectories on floor plans
-- [x] Statistics: coverage distribution, sample density analysis
+### Priority 4 — Lower priority
+- [ ] ablation_small_unet
+- [ ] cross_eval_traj_to_uniform
+- [ ] cross_eval_uniform_to_traj
+- [ ] num_trajectories_sweep (Hydra multirun)
 
 ---
 
-## Phase 2: Model Development (Weeks 3-4) ✅ COMPLETE
+## Cluster Configuration
 
-### Goals
-- [x] Implement non-learning baselines (interpolation)
-- [x] Implement DDPM/DDIM diffusion model
-- [x] Implement trajectory-conditioned U-Net
-- [x] Implement Lightning training module with EMA
-- [x] Implement inference utilities and evaluation metrics
+| Resource | Value |
+|----------|-------|
+| Partition (GPU) | gpu2, node=deepnet2 |
+| Partition (CPU) | cpu, node=mcore-n01 (128 cores) |
+| GPUs | 8x NVIDIA H200, MIG-partitioned |
+| Max concurrent jobs | 4 (QOSMaxGRESPerUser) |
+| Max per MIG profile | 1g.18gb=4, 2g.35gb=2, 7g.141gb=1 |
+| Max time per job | 48h |
+| Conda env | trajdiff |
 
-### Baselines to Implement
-
-#### 2.1 Classical Interpolation
-
-```python
-class InterpolationBaseline:
-    """Classical interpolation methods."""
-    
-    def kriging(self, sparse_rss, mask, floor_plan):
-        """Gaussian process interpolation."""
-        pass
-    
-    def idw(self, sparse_rss, mask, floor_plan, power=2):
-        """Inverse distance weighting."""
-        pass
-    
-    def rbf(self, sparse_rss, mask, floor_plan, kernel='thin_plate'):
-        """Radial basis function interpolation."""
-        pass
-```
-
-#### 2.2 U-Net Regression Baseline
-
-Simple supervised learning baseline:
-```
-Input: floor_plan (3, H, W) + sparse_rss (1, H, W) + mask (1, H, W)
-       → Concatenate → (5, H, W)
-Output: full_map (1, H, W)
-Loss: MSE on full map
-```
-
-#### 2.3 Standard Diffusion Baseline
-
-DDPM-style diffusion that treats sparse samples as conditioning:
-```
-Input: floor_plan + sparse_rss + mask (concatenated as condition)
-Output: denoised radio map
-Process: Standard forward/reverse diffusion
-Note: This baseline ignores trajectory structure (treats samples as independent)
-```
-
-### Evaluation Protocol
-
-**Metrics**:
-```python
-def evaluate_radio_map(pred: np.ndarray, gt: np.ndarray, mask: np.ndarray):
-    """
-    Args:
-        pred: (H, W) predicted radio map
-        gt: (H, W) ground truth radio map
-        mask: (H, W) trajectory sampling mask
-    
-    Returns:
-        dict with:
-        - rmse_overall: RMSE on all pixels
-        - rmse_observed: RMSE on pixels with samples (interpolation)
-        - rmse_unobserved: RMSE on pixels without samples (extrapolation)
-        - ssim: Structural similarity
-        - coverage_weighted_rmse: Higher weight on unobserved regions
-    """
-```
-
-**Split Strategy**:
-- Train: 70% of buildings
-- Val: 15% of buildings  
-- Test: 15% of buildings
-- Within each split, generate multiple trajectories per radio map
-
-### Deliverables
-- [x] `src/models/baselines/` with all baseline implementations (IDW, RBF, kriging, nearest neighbor)
-- [x] `src/models/diffusion/ddpm.py` - GaussianDiffusion with multiple noise schedules
-- [x] `src/models/diffusion/unet.py` - U-Net backbone with attention
-- [x] `src/models/encoders/condition_encoder.py` - TrajectoryConditionedUNet
-- [x] `src/training/diffusion_module.py` - Lightning training module
-- [x] `src/training/inference.py` - Inference utilities
-- [x] `src/training/callbacks.py` - W&B logging callbacks
-- [x] `src/evaluation/metrics.py` - RMSE, SSIM, trajectory-aware metrics
-- [x] `scripts/train.py` - Hydra training script
-- [x] `scripts/evaluate.py` - Evaluation script
-- [x] 101 tests passing
+### Batch Size Constraints (OOM-validated)
+- 7g.141gb: batch=32 x accum=2 (effective 64)
+- 2g.35gb: batch=8 x accum=2 (effective 16)
+- 1g.18gb: batch=4 x accum=4 (effective 16)
+- Always set `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`
 
 ---
 
-## Phase 3: Physics-Informed Components & Architecture (Week 5) ✅ COMPLETE
+## Architecture Overview
 
-### Goals
-- [x] Physics-informed losses (TrajectoryConsistency, CoverageWeighted, DistanceDecay)
-- [x] CoverageAwareUNet with coverage-modulated attention (ECCV novelty)
-- [x] Integration into training pipeline with toggle flags
-- [x] Comprehensive testing (98 new tests)
-
-### Architecture Overview
-
+### Conditioning Pipeline
 ```
-                                    ┌─────────────────────┐
-                                    │   Trajectory Encoder │
-                                    │   (GNN/Transformer)  │
-                                    └──────────┬──────────┘
-                                               │
-                                    trajectory_embedding
-                                               │
-                                               ▼
-┌───────────┐   ┌───────────┐   ┌─────────────────────────────┐
-│ Floor Plan│ → │  Encoder  │ → │                             │
-└───────────┘   └───────────┘   │    Diffusion U-Net          │
-                                │    with Cross-Attention     │ → Predicted Map
-┌───────────┐   ┌───────────┐   │    to Trajectory Embedding  │
-│Sparse RSS │ → │  Encoder  │ → │                             │
-└───────────┘   └───────────┘   └─────────────────────────────┘
-                                               ▲
-                                               │
-                                    ┌──────────┴──────────┐
-                                    │  Noise Level (t)     │
-                                    │  Time Embedding      │
-                                    └─────────────────────┘
+building_map (1ch)  ──┐
+sparse_rss (1ch)    ──┼──► Concat (4-5ch) ──► CNN ──► condition (64ch)
+trajectory_mask (1ch)─┘                                    │
+coverage_density (1ch)─┘                                   │
+tx_position (2)     ──► MLP ──► Spatial encoding ──────────┘
+                                                           │
+                                           concat with x_t │
+                                                           ▼
+                                              UNet (65ch input)
+                                                           │
+                                                    noise prediction
 ```
 
-### 3.1 Trajectory Encoder
+### Novel Components
+1. **CoverageAwareUNet** — UNet with additive log-bias attention modulated by coverage density
+2. **Physics-Informed Losses** — trajectory consistency (0.5) + distance decay (0.1) with 30-epoch warmup + 20-epoch ramp
+3. **Min-SNR-gamma weighting** — stabilizes diffusion training across timesteps
 
-**Why we need this**: Standard diffusion conditions on images (sparse RSS map). But this loses:
-- Temporal order of samples
-- Path geometry (which direction was walked)
-- Coverage patterns (where is dense vs. sparse)
-
-**Design Options**:
-
-**Option A: Graph Neural Network**
-```python
-class TrajectoryGNN(nn.Module):
-    """
-    Encode trajectory as a graph where:
-    - Nodes = trajectory points (x, y, rss)
-    - Edges = consecutive points on path
-    """
-    def __init__(self, hidden_dim=256, num_layers=4):
-        self.node_encoder = MLP([3, hidden_dim, hidden_dim])  # (x, y, rss) → features
-        self.gnn_layers = nn.ModuleList([
-            GATConv(hidden_dim, hidden_dim) for _ in range(num_layers)
-        ])
-        self.global_pool = GlobalAttentionPool(hidden_dim)
-    
-    def forward(self, trajectory_points, edge_index):
-        # trajectory_points: (N, 3) - (x, y, rss) for each point
-        # edge_index: (2, E) - edges between consecutive points
-        x = self.node_encoder(trajectory_points)
-        for layer in self.gnn_layers:
-            x = layer(x, edge_index) + x  # residual
-        return self.global_pool(x)  # (hidden_dim,) global embedding
-```
-
-**Option B: Transformer on Point Sequence**
-```python
-class TrajectoryTransformer(nn.Module):
-    """
-    Encode trajectory as a sequence with positional encoding.
-    """
-    def __init__(self, hidden_dim=256, num_layers=4, num_heads=8):
-        self.point_encoder = MLP([3, hidden_dim, hidden_dim])
-        self.pos_encoding = SinusoidalPositionalEncoding(hidden_dim)
-        self.transformer = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(hidden_dim, num_heads),
-            num_layers
-        )
-        self.cls_token = nn.Parameter(torch.randn(1, 1, hidden_dim))
-    
-    def forward(self, trajectory_points):
-        # trajectory_points: (B, N, 3) - batched trajectories
-        x = self.point_encoder(trajectory_points)  # (B, N, D)
-        x = x + self.pos_encoding(torch.arange(x.shape[1]))
-        cls = self.cls_token.expand(x.shape[0], -1, -1)
-        x = torch.cat([cls, x], dim=1)  # prepend CLS token
-        x = self.transformer(x)
-        return x[:, 0]  # CLS token as global embedding
-```
-
-**Option C: Hybrid - Spatial + Sequential**
-```python
-class HybridTrajectoryEncoder(nn.Module):
-    """
-    Combine:
-    1. Sparse map encoding (spatial info)
-    2. Sequence encoding (temporal/path info)
-    3. Coverage density encoding (where data exists)
-    """
-    def __init__(self, hidden_dim=256):
-        self.sparse_encoder = ConvEncoder()  # Process sparse RSS map
-        self.coverage_encoder = ConvEncoder()  # Process coverage density
-        self.sequence_encoder = TrajectoryTransformer()  # Process point sequence
-        self.fusion = CrossAttentionFusion()
-    
-    def forward(self, sparse_rss, mask, coverage_density, trajectory_points):
-        spatial_feat = self.sparse_encoder(sparse_rss, mask)
-        coverage_feat = self.coverage_encoder(coverage_density)
-        sequence_feat = self.sequence_encoder(trajectory_points)
-        return self.fusion(spatial_feat, coverage_feat, sequence_feat)
-```
-
-### 3.2 Diffusion Model
-
-**Base**: Standard DDPM/DDIM with U-Net backbone
-
-**Modifications for trajectory conditioning**:
-
-```python
-class TrajectoryDiffusion(nn.Module):
-    def __init__(
-        self,
-        unet: UNet,
-        trajectory_encoder: TrajectoryEncoder,
-        num_timesteps: int = 1000,
-        beta_schedule: str = "linear"
-    ):
-        self.unet = unet
-        self.trajectory_encoder = trajectory_encoder
-        self.betas = get_beta_schedule(beta_schedule, num_timesteps)
-        # ... standard diffusion setup
-    
-    def forward(self, x_0, floor_plan, trajectory_data, t=None):
-        """
-        Training forward pass.
-        
-        Args:
-            x_0: (B, 1, H, W) clean radio maps
-            floor_plan: (B, 3, H, W) floor plan features
-            trajectory_data: dict with sparse_rss, mask, points
-            t: (B,) timesteps (if None, sample randomly)
-        """
-        # Encode trajectory
-        traj_embedding = self.trajectory_encoder(
-            trajectory_data['sparse_rss'],
-            trajectory_data['mask'],
-            trajectory_data['coverage_density'],
-            trajectory_data['points']
-        )
-        
-        # Forward diffusion: add noise
-        if t is None:
-            t = torch.randint(0, self.num_timesteps, (x_0.shape[0],))
-        noise = torch.randn_like(x_0)
-        x_t = self.q_sample(x_0, t, noise)
-        
-        # Predict noise with trajectory conditioning
-        noise_pred = self.unet(
-            x_t, 
-            t, 
-            floor_plan=floor_plan,
-            traj_embedding=traj_embedding
-        )
-        
-        return noise_pred, noise
-    
-    @torch.no_grad()
-    def sample(self, floor_plan, trajectory_data, num_samples=1):
-        """
-        Generate radio maps conditioned on floor plan and trajectory.
-        
-        Returns multiple samples for uncertainty estimation.
-        """
-        traj_embedding = self.trajectory_encoder(...)
-        
-        # DDIM sampling for speed
-        x = torch.randn(num_samples, 1, H, W)
-        for t in reversed(range(self.num_timesteps)):
-            x = self.p_sample(x, t, floor_plan, traj_embedding)
-        
-        return x  # (num_samples, 1, H, W)
-```
-
-### 3.3 U-Net with Cross-Attention
-
-```python
-class TrajectoryConditionedUNet(nn.Module):
-    """
-    U-Net with cross-attention layers for trajectory conditioning.
-    """
-    def __init__(self, in_channels=4, out_channels=1, traj_dim=256):
-        # Encoder
-        self.enc1 = DownBlock(in_channels, 64)
-        self.enc2 = DownBlock(64, 128)
-        self.enc3 = DownBlock(128, 256)
-        self.enc4 = DownBlock(256, 512)
-        
-        # Cross-attention at bottleneck
-        self.bottleneck_attn = CrossAttention(512, traj_dim)
-        
-        # Decoder with skip connections
-        self.dec4 = UpBlock(512, 256)
-        self.dec3 = UpBlock(256, 128)
-        self.dec2 = UpBlock(128, 64)
-        self.dec1 = UpBlock(64, out_channels)
-        
-        # Time embedding
-        self.time_mlp = TimeMLP(256)
-    
-    def forward(self, x, t, floor_plan, traj_embedding):
-        # Concatenate input with floor plan
-        x = torch.cat([x, floor_plan], dim=1)  # (B, 4, H, W)
-        
-        # Time embedding
-        t_emb = self.time_mlp(t)
-        
-        # Encoder
-        e1 = self.enc1(x, t_emb)
-        e2 = self.enc2(e1, t_emb)
-        e3 = self.enc3(e2, t_emb)
-        e4 = self.enc4(e3, t_emb)
-        
-        # Cross-attention with trajectory
-        e4 = self.bottleneck_attn(e4, traj_embedding)
-        
-        # Decoder
-        d4 = self.dec4(e4, e3, t_emb)
-        d3 = self.dec3(d4, e2, t_emb)
-        d2 = self.dec2(d3, e1, t_emb)
-        out = self.dec1(d2, None, t_emb)
-        
-        return out
-```
-
-### Deliverables
-- [x] `src/training/losses.py` - TrajectoryDiffLoss with 3 physics losses
-- [x] `src/models/diffusion/coverage_unet.py` - CoverageAwareUNet (Small/Medium/Large)
-- [x] `src/models/diffusion/attention.py` - CoverageAwareAttention
-- [x] Integration into DiffusionModule with `use_physics_losses` and `use_coverage_attention` flags
-- [x] Smoke tested with real RadioMapSeer data
+### Key Fixes from CVPR Audit (Feb 15, 2026)
+- Additive log-bias attention (was multiplicative — cancelled in softmax)
+- DDIM uses linspace for timestep subsequence (was arange, caused index OOB)
+- Physics loss gradients detached from diffusion backbone
+- LR schedule uses trainer.estimated_stepping_batches (was hardcoded steps)
+- Building map convention: free_space = building_map > 0.0 (was inverted)
+- SSIM computed on dBm scale with skimage sliding window
+- Worker seeding for reproducibility
+- Per-region metrics (observed vs unobserved)
 
 ---
 
-## Phase 4: Experiments (Week 8) 🔄 IN PROGRESS
+## Phase Summaries
 
-### Goals
-- [x] 16 experiment configurations created
-- [x] SLURM training scripts for H200 GPUs
-- [x] Evaluation scripts with dBm-scale metrics
-- [x] SLURM scripts fixed (partition=gpu2, MIG gres, nodelist=deepnet2, mcs-label)
-- [x] wandb offline mode configured
-- [x] GPU validation script created
-- [x] Classical baseline evaluation script created
-- [x] Uncertainty analysis script created
-- [x] Paper figure generation script created
-- [x] Run GPU validation on cluster (smoke test + 1-epoch training on 2g.35gb)
-- [x] OOM fixes: batch=8+accum=2 for 2g.35gb, PYTORCH_CUDA_ALLOC_CONF, TF32 matmul
-- [x] Wave 1 submitted: trajectory_full, trajectory_baseline, uniform_baseline, ablation_no_physics_loss
-- [x] Wave 1 re-submitted as jobs 2683-2686 (originals 2674-2681 FAILED)
-- [ ] Wave 1 training completes (jobs will need checkpoint resumption — time limits insufficient for 200 epochs)
-- [ ] Submit Waves 2-4 (remaining ablations, sweeps, cross-eval)
-- [ ] Run classical baselines (scripts/run_baselines.py)
-- [ ] Analyze results
+### Phase 0-1: Setup + Data Pipeline
+- RadioMapSeer dataset (701 maps x 80 TX = 56K radio maps)
+- Three trajectory types: shortest-path (A*), random-walk, corridor-biased
+- Data augmentation: rotation, flip (physics-preserving)
+- 70/15/15 train/val/test split by building
 
-### 4.1 Physics-Informed Loss
+### Phase 2: Model Development
+- DDPM with cosine noise schedule, DDIM fast sampling (50 steps)
+- UNet backbone (Small/Medium/Large) with attention at low resolutions
+- TrajectoryConditionedUNet fusing 5 conditioning signals
+- Lightning training module with EMA, warmup+cosine LR
+- Evaluation metrics: RMSE, SSIM, PSNR + trajectory-aware variants
 
-```python
-class PhysicsInformedLoss(nn.Module):
-    """
-    Additional loss terms based on radio propagation physics.
-    """
-    
-    def trajectory_consistency_loss(self, pred_map, trajectory_points):
-        """
-        Predicted RSS along trajectory should match observed RSS.
-        
-        This is STRONGER than just MSE on sparse points because:
-        - We sample intermediate points on the trajectory
-        - We check smoothness along the path
-        """
-        loss = 0
-        for (x, y, rss_observed) in trajectory_points:
-            rss_pred = bilinear_sample(pred_map, x, y)
-            loss += (rss_pred - rss_observed) ** 2
-        return loss
-    
-    def wall_attenuation_loss(self, pred_map, floor_plan, tx_location):
-        """
-        Signal should drop when crossing walls.
-        
-        For each wall pixel, check that:
-        - RSS on Tx side > RSS on far side (by expected attenuation)
-        """
-        # Simplified: detect wall crossings, penalize if gradient wrong sign
-        pass
-    
-    def distance_decay_loss(self, pred_map, tx_location):
-        """
-        Signal should generally decrease with distance from Tx.
-        (Soft constraint - can be violated by multipath)
-        """
-        pass
-```
+### Phase 3: Physics + Architecture
+- TrajectoryDiffLoss (consistency + coverage-weighted + distance decay)
+- CoverageAwareUNet with coverage-modulated attention
+- Physics loss warmup (30 epoch delay + 20 epoch ramp)
+- 199 tests across 9 test files
 
-### 4.2 Uncertainty Quantification
+### Phase 3.5: CVPR Audit
+- 8 critical, 13 moderate, 3 suggestion fixes
+- 24 changes across 14 files + 2 new files
+- All Wave 1 checkpoints invalidated
 
-**Approach**: Generate multiple samples from diffusion, compute statistics
+### Phase 4: Experiments (IN PROGRESS)
+- 19 experiment configs ready (16 original + 3 DL baselines)
+- 4 jobs running (1 GPU full model, 2 GPU baselines, 1 CPU classical baselines)
+- Classical baselines: nearest neighbor, IDW, RBF, distance transform
+- DL baselines: Supervised UNet, RadioUNet, RMDM (all implemented, ready to train)
 
-```python
-def estimate_uncertainty(model, floor_plan, trajectory_data, n_samples=10):
-    """
-    Generate multiple radio map samples and compute uncertainty.
-    
-    Returns:
-        mean_map: (H, W) mean prediction
-        std_map: (H, W) standard deviation (uncertainty)
-        samples: (n_samples, H, W) all samples
-    """
-    samples = model.sample(floor_plan, trajectory_data, num_samples=n_samples)
-    mean_map = samples.mean(dim=0)
-    std_map = samples.std(dim=0)
-    return mean_map, std_map, samples
-```
-
-**Expected behavior**:
-- Low uncertainty along trajectories (we have data)
-- High uncertainty in blind spots (extrapolation)
-- Uncertainty should correlate with actual error
-
-### Deliverables
-- [x] `src/training/losses.py` with physics-informed losses
-- [x] 16 experiment configs in `configs/experiment/`
-- [x] `scripts/run_experiments.sh` - SLURM training launcher (fixed: partition, gres, nodelist, mcs-label, wandb offline)
-- [x] `scripts/submit_experiment.sh` - Per-experiment submitter with MIG profile selection
-- [x] `scripts/submit_all.sh` - Batch submission with concurrency control
-- [x] `scripts/run_evaluation.sh` - Batch evaluation
-- [x] `scripts/gpu_validation.sh` - GPU pipeline validation job
-- [x] `scripts/run_baselines.py` - Classical baseline evaluation
-- [x] `scripts/analyze_uncertainty.py` - Uncertainty calibration analysis
-- [x] `scripts/generate_figures.py` - Paper figure generation
-- [ ] Run GPU validation and experiments
-
----
-
-## Phase 5: Experiments & Ablations (Weeks 9-10)
-
-### Experiment Matrix
-
-| Experiment | Description | Metric Focus |
-|------------|-------------|--------------|
-| E1: Baseline comparison | All baselines vs TrajectoryDiff | RMSE, SSIM |
-| E2: Sampling type | Uniform vs trajectory sampling | RMSE_observed vs RMSE_unobserved |
-| E3: Trajectory encoder ablation | GNN vs Transformer vs Hybrid | RMSE, compute time |
-| E4: Coverage level | 1%, 5%, 10%, 20% coverage | RMSE vs coverage curve |
-| E5: Multiple trajectories | 1, 3, 5, 10 trajectories | RMSE improvement |
-| E6: Trajectory type | Shortest-path vs random-walk vs corridor-biased | RMSE per type |
-| E7: Physics loss ablation | With/without physics constraints | RMSE, physical plausibility |
-| E8: Uncertainty calibration | Check if uncertainty matches error | Calibration plots |
-| E9: Generalization | Train on subset, test on held-out buildings | Cross-building RMSE |
-
-### Key Hypotheses to Test
-
-1. **H1**: TrajectoryDiff > baselines when sampling is trajectory-based
-2. **H2**: TrajectoryDiff ≈ baselines when sampling is uniform (our advantage is trajectory handling)
-3. **H3**: Uncertainty is higher in blind spots and correlates with error
-4. **H4**: Multiple trajectories improve performance (especially coverage)
-5. **H5**: Physics losses improve physical plausibility without hurting RMSE
-
-### Visualization Outputs
-
-- Radio map predictions vs ground truth
-- Uncertainty maps with error overlays
-- Trajectory coverage visualization
-- Per-region error breakdown (corridor vs room vs blind spot)
-
-### Deliverables
-- [ ] Full experiment results table
-- [ ] Ablation study figures
-- [ ] Analysis document interpreting results
-
----
-
-## Phase 6: Paper Writing (Weeks 11-12)
-
-### Target Venue
-- **Primary**: ECCV 2025 (or CVPR 2026)
-- **Backup**: ICML, NeurIPS workshop
-
-### Paper Outline
-
-1. **Introduction** (1 page)
-   - Radio map problem and importance
-   - Gap: trajectory vs uniform sampling
-   - Our contribution
-
-2. **Related Work** (1 page)
-   - Diffusion for radio maps (IRDM, RadioDiff, etc.)
-   - Trajectory-based localization
-   - Physics-informed deep learning
-
-3. **Method** (2-3 pages)
-   - Problem formulation
-   - Trajectory encoding
-   - TrajectoryDiff architecture
-   - Physics-informed training
-
-4. **Experiments** (2-3 pages)
-   - Dataset and setup
-   - Baselines
-   - Main results
-   - Ablations
-   - Uncertainty analysis
-
-5. **Conclusion** (0.5 page)
-
-### Figures to Prepare
-
-- Fig 1: Problem illustration (uniform vs trajectory sampling)
-- Fig 2: Architecture diagram
-- Fig 3: Qualitative results (radio maps)
-- Fig 4: Uncertainty visualization
-- Fig 5: Ablation plots
-- Fig 6: Coverage vs performance curves
-
-### Deliverables
-- [ ] Complete paper draft
-- [ ] Supplementary material
-- [ ] Code release preparation
-
----
-
-## Risk Assessment & Mitigations
-
-| Risk | Likelihood | Impact | Mitigation |
-|------|------------|--------|------------|
-| RadioMapSeer not suitable | Low | High | Have backup: simulate trajectories on other datasets |
-| Trajectory encoding doesn't help | Medium | High | Try multiple encoder designs; ablate thoroughly |
-| Diffusion too slow | Medium | Medium | Use DDIM; consider consistency models |
-| Physics losses hurt performance | Low | Low | Make them optional; tune weights carefully |
-| Overfitting to RadioMapSeer | Medium | Medium | Test on held-out buildings; collect small real dataset |
-
----
-
-## Success Criteria
-
-**Minimum Viable**:
-- TrajectoryDiff outperforms baselines on trajectory-sampled data by >10% RMSE
-- Uncertainty correlates with error (r > 0.5)
-- Paper submitted to workshop
-
-**Target**:
-- Clear improvement across all trajectory types
-- Well-calibrated uncertainty
-- ECCV/CVPR main conference paper
-
-**Stretch**:
-- Real-world cellular trajectory dataset collected
-- Demonstrate practical localization improvement
-- Open-source release with adoption
-
----
-
-## Timeline Summary
-
-| Week | Phase | Key Deliverable | Status |
-|------|-------|-----------------|--------|
-| 0 | Setup | Working environment + data loaded | ✅ Complete |
-| 1-2 | Data Pipeline | Trajectory sampling implemented | ✅ Complete |
-| 3-4 | Model Development | DDPM, U-Net, Training Module | ✅ Complete |
-| 5 | Physics + Architecture | CoverageAwareUNet, physics losses, 199 tests | ✅ Complete |
-| 6-7 | Experiments | 16 configs ready, SLURM scripts | ✅ Configs Ready |
-| 8 | GPU Training | Wave 1: 4 experiments running on H200 | 🔄 In Progress |
-| 9-10 | Paper | Submission-ready draft | ⬜ Next |
+### Phase 5: Paper Writing (NOT STARTED)
+- Target venue: CVPR 2026 or ECCV 2026
+- Figures needed: problem illustration, architecture, qualitative results, uncertainty viz, ablation plots, coverage sweep

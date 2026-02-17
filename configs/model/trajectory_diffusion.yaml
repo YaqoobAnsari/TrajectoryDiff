@@ -3,6 +3,9 @@
 
 name: trajectory_diffusion
 
+# Model type: diffusion | supervised | radio_unet | rmdm
+model_type: diffusion
+
 # Input/output channels
 # Radio map is 1 channel; conditioning is fused by ConditionEncoder (separate)
 in_channels: 1

@@ -41,6 +41,112 @@ from evaluation.metrics import compute_sample_diversity, compute_masked_ssim, co
 from training import DiffusionModule, DiffusionInference, denormalize_radio_map
 
 
+# ---------------------------------------------------------------------------
+# Multi-model inference support
+# ---------------------------------------------------------------------------
+
+def _detect_model_type(checkpoint_path: Path) -> str:
+    """Auto-detect model type from checkpoint state_dict keys."""
+    ckpt = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+    keys = set(ckpt.get('state_dict', {}).keys())
+
+    if any(k.startswith('conductor.') for k in keys):
+        return 'rmdm'
+    if any(k.startswith('encoder_blocks.') for k in keys) and not any(
+        k.startswith('model.') for k in keys
+    ):
+        return 'radio_unet'
+    if any(k.startswith('diffusion.') for k in keys):
+        return 'diffusion'
+    if any(k.startswith('model.') for k in keys):
+        return 'supervised'
+    return 'diffusion'
+
+
+class _DirectInference:
+    """Inference wrapper for non-diffusion models (supervised, radio_unet).
+
+    Provides the same ``.sample(condition, ...)`` interface as DiffusionInference
+    but simply runs a single forward pass.
+    """
+
+    def __init__(self, module, device):
+        self.module = module.to(device).eval()
+        self.device = device
+
+    @torch.no_grad()
+    def sample(self, condition, use_ddim=True, progress=False, **kwargs):
+        condition = {
+            k: v.to(self.device) if isinstance(v, torch.Tensor) else v
+            for k, v in condition.items()
+        }
+        return self.module(condition)
+
+
+class _RMDMInference:
+    """Inference wrapper for RMDM baseline (uses its own .sample())."""
+
+    def __init__(self, module, device):
+        self.module = module.to(device).eval()
+        self.device = device
+
+    @torch.no_grad()
+    def sample(self, condition, use_ddim=True, progress=False, **kwargs):
+        condition = {
+            k: v.to(self.device) if isinstance(v, torch.Tensor) else v
+            for k, v in condition.items()
+        }
+        return self.module.sample(condition, use_ddim=use_ddim, progress=progress)
+
+
+def load_inference(
+    checkpoint_path: Path,
+    device: torch.device,
+    model_type: Optional[str] = None,
+):
+    """Load model and return a unified inference wrapper.
+
+    Args:
+        checkpoint_path: Path to Lightning checkpoint.
+        device: Computation device.
+        model_type: Explicit model type. Auto-detected from checkpoint if None.
+
+    Returns:
+        Inference wrapper with ``.sample(condition, use_ddim, progress)`` method.
+    """
+    if model_type is None or model_type == 'diffusion':
+        # Try auto-detect
+        detected = _detect_model_type(checkpoint_path)
+        if model_type is None:
+            model_type = detected
+            print(f"Auto-detected model_type: {model_type}")
+
+    if model_type == 'diffusion':
+        return DiffusionInference.from_checkpoint(
+            checkpoint_path, device=device, use_ema=True,
+        )
+    elif model_type == 'supervised':
+        from models.baselines import SupervisedUNetBaseline
+        module = SupervisedUNetBaseline.load_from_checkpoint(
+            checkpoint_path, map_location='cpu',
+        )
+        return _DirectInference(module, device)
+    elif model_type == 'radio_unet':
+        from models.baselines import RadioUNetBaseline
+        module = RadioUNetBaseline.load_from_checkpoint(
+            checkpoint_path, map_location='cpu',
+        )
+        return _DirectInference(module, device)
+    elif model_type == 'rmdm':
+        from models.baselines import RMDMBaseline
+        module = RMDMBaseline.load_from_checkpoint(
+            checkpoint_path, map_location='cpu',
+        )
+        return _RMDMInference(module, device)
+    else:
+        raise ValueError(f"Unknown model_type: {model_type}")
+
+
 def compute_rmse(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     """Compute Root Mean Square Error."""
     return torch.sqrt(((pred - target) ** 2).mean(dim=(1, 2, 3)))
@@ -174,7 +280,7 @@ def compute_blind_spot_rmse(
 
 @torch.no_grad()
 def evaluate_model(
-    inference: DiffusionInference,
+    inference,  # DiffusionInference | _DirectInference | _RMDMInference
     dataloader: torch.utils.data.DataLoader,
     device: torch.device,
     max_samples: Optional[int] = None,
@@ -188,7 +294,7 @@ def evaluate_model(
     Evaluate model on dataloader.
 
     Args:
-        inference: DiffusionInference instance
+        inference: Any object with .sample(condition, use_ddim, progress) method.
         dataloader: Test dataloader
         device: Computation device
         max_samples: Maximum samples to evaluate
@@ -347,7 +453,7 @@ def evaluate_model(
 
 
 def save_visualizations(
-    inference: DiffusionInference,
+    inference,  # Any inference wrapper with .sample()
     dataloader: torch.utils.data.DataLoader,
     output_dir: Path,
     device: torch.device,
@@ -461,6 +567,9 @@ def main(cfg: DictConfig):
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
+    # Determine model type (auto-detect or from config)
+    model_type = cfg.model.get('model_type', None)
+
     print("=" * 60)
     print("TrajectoryDiff Evaluation")
     print("=" * 60)
@@ -470,13 +579,9 @@ def main(cfg: DictConfig):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Device: {device}")
 
-    # Load model
+    # Load model (auto-detects model_type from checkpoint if not in config)
     print("\nLoading model...")
-    inference = DiffusionInference.from_checkpoint(
-        checkpoint_path,
-        device=device,
-        use_ema=True,
-    )
+    inference = load_inference(checkpoint_path, device=device, model_type=model_type)
 
     # Setup data
     print("Setting up data...")

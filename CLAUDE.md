@@ -8,7 +8,7 @@ Research project exploring trajectory-conditioned diffusion models for indoor ra
 
 **Target**: ECCV-level publication demonstrating trajectory-aware diffusion outperforms uniform-sampling assumptions.
 
-**Version**: v0.4.0-experiment-ready | **Tests**: 199 passing (9 test files)
+**Version**: v0.4.0-experiment-ready | **Tests**: 199 passing (9 test files) | **CVPR Audit**: 24 fixes applied (Feb 15, 2026)
 
 ## Key Concepts (Domain Knowledge)
 
@@ -31,10 +31,13 @@ TrajectoryDiff/
 │   │   └── trajectory_diffusion.yaml  # Model architecture config
 │   ├── training/
 │   │   └── default.yaml       # Training hyperparameters
-│   └── experiment/            # 16 experiment configs
+│   └── experiment/            # 19 experiment configs
 │       ├── trajectory_full.yaml          # Full model, all features
 │       ├── trajectory_baseline.yaml      # Trajectory sampling baseline
 │       ├── uniform_baseline.yaml         # Uniform sampling baseline
+│       ├── supervised_unet.yaml          # Supervised UNet DL baseline
+│       ├── radio_unet.yaml              # RadioUNet DL baseline
+│       ├── rmdm_baseline.yaml           # RMDM DL baseline
 │       ├── ablation_no_*.yaml            # 5 ablation configs
 │       ├── cross_eval_*.yaml             # 2 cross-evaluation configs
 │       ├── coverage_sweep_{1,5,10,20}pct.yaml  # Coverage sweeps
@@ -54,7 +57,11 @@ TrajectoryDiff/
 │   │   │   └── attention.py   # CoverageAwareAttention (novel)
 │   │   ├── encoders/          # Condition encoders
 │   │   │   └── condition_encoder.py  # TrajectoryConditionedUNet
-│   │   └── baselines/         # IDW, RBF, Kriging, NN interpolation
+│   │   └── baselines/         # Classical + DL baselines
+│   │       ├── interpolation.py  # IDW, RBF, Kriging, NN interpolation
+│   │       ├── supervised_unet.py  # Supervised UNet (same arch, no diffusion)
+│   │       ├── radio_unet.py     # RadioUNet (Levie et al., 2021)
+│   │       └── rmdm.py           # RMDM (Xu et al., 2025)
 │   ├── training/              # Training logic
 │   │   ├── diffusion_module.py  # Lightning DiffusionModule (EMA, LR schedule)
 │   │   ├── losses.py          # TrajectoryDiffLoss (physics-informed)
@@ -118,6 +125,9 @@ python scripts/smoke_test_quick.py
 python scripts/train.py                                       # Default config
 python scripts/train.py experiment=trajectory_full            # Full model
 python scripts/train.py experiment=trajectory_baseline        # Trajectory baseline
+python scripts/train.py experiment=supervised_unet            # Supervised UNet baseline
+python scripts/train.py experiment=radio_unet                 # RadioUNet baseline
+python scripts/train.py experiment=rmdm_baseline              # RMDM baseline
 python scripts/train.py data.loader.batch_size=16 training.max_epochs=50  # Override
 
 # Training (SLURM cluster - via submit scripts)
@@ -245,27 +255,29 @@ Each trajectory produces: `[(t, x, y, rss), ...]` with optional noise injection.
 
 ## Current Focus
 
-**Phase**: GPU Training (v0.4.0) | Wave 1 of 4 running on SLURM cluster
+**Phase**: GPU Training (v0.4.0) | Post-CVPR-audit, fresh training wave
 
-### Wave 1 (Running - re-submitted Feb 10, 2026 ~21:47):
-| Job | Experiment | MIG | Batch | Epochs | Status (as of ~10h in) |
-|-----|-----------|-----|-------|--------|------------------------|
-| 2683 | trajectory_full | 7g.141gb | 32 x accum=2 | 200 | Epoch 22, val/loss=0.0329, ~25 min/epoch |
-| 2684 | trajectory_baseline | 2g.35gb | 8 x accum=2 | 200 | Epoch 13, val/loss=0.0041, ~41 min/epoch |
-| 2685 | uniform_baseline | 2g.35gb | 8 x accum=2 | 200 | Epoch 18, val/loss=0.0039, ~30 min/epoch |
-| 2686 | ablation_no_physics_loss | 2g.35gb | 8 x accum=2 | 200 | PENDING (QOSMaxGRESPerUser) |
+### Active Jobs (Feb 16, 2026):
+| Job | Experiment | Resource | Batch | Status |
+|-----|-----------|----------|-------|--------|
+| 2707 | trajectory_full | gpu2 / 7g.141gb | 32 x accum=2 | Epoch ~73/200, val/loss=0.00574, ~21 min/epoch |
+| 2725 | trajectory_baseline | gpu2 / 2g.35gb | 8 x accum=2 | Epoch 0/200, ~35 min/epoch |
+| 2726 | uniform_baseline | gpu2 / 2g.35gb | 8 x accum=2 | Epoch 0/200, ~28 min/epoch |
+| 2727 | classical baselines | cpu / mcore-n01 | - | 8480 test samples, ~2.2s/sample, ~5h total |
 
-**Note:** Original Wave 1 jobs (2674-2681) all FAILED and were re-submitted as 2683-2686.
-Time limits (24h/36h) are insufficient for 200 epochs — jobs will need checkpoint resumption.
+All FRESH=1 (post-CVPR-audit code). Previous Wave 1 jobs (2683-2686) used pre-audit code and are **invalid**.
 
-### Remaining Waves:
-- **Wave 2**: ablation_no_coverage_attention, ablation_no_trajectory_mask, ablation_no_coverage_density, ablation_no_tx_position
-- **Wave 3**: coverage_sweep_{1,5,10,20}pct
-- **Wave 4**: cross_eval_traj_to_uniform, cross_eval_uniform_to_traj, ablation_small_unet, num_trajectories_sweep
+### Remaining Experiment Queue:
+- **Ablations**: no_physics_loss, no_coverage_attention, no_trajectory_mask, no_coverage_density, no_tx_position
+- **Coverage sweeps**: 1%, 5%, 20% (10% = trajectory_full)
+- **Cross-eval**: traj_to_uniform, uniform_to_traj
+- **DL baselines**: supervised_unet, radio_unet, rmdm_baseline
+- **Extras**: ablation_small_unet, num_trajectories_sweep
 
 ### After Training Completes:
-1. Run classical baselines: `python scripts/run_baselines.py`
-2. Evaluate best checkpoints: `python scripts/evaluate.py checkpoint=<path>`
-3. Analyze uncertainty: `python scripts/analyze_uncertainty.py --checkpoint <best.ckpt>`
-4. Generate figures: `python scripts/generate_figures.py --checkpoint <best.ckpt>`
-5. Write paper
+1. Review classical baseline results: `experiments/eval_results/baselines.json`
+2. Resume GPU jobs after 48h timeout (checkpoint resume, no FRESH flag)
+3. Evaluate best checkpoints: `python scripts/evaluate.py checkpoint=<path>`
+4. Submit ablation wave (2 at a time on 2g.35gb)
+5. Analyze uncertainty + generate figures
+6. Write paper

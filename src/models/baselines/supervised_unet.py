@@ -117,7 +117,7 @@ class SupervisedUNetBaseline(L.LightningModule):
         t = torch.zeros(B, dtype=torch.long, device=device)
 
         # Model forward returns predicted noise/x0 - we interpret it as predicted radio map
-        pred = self.model(x_t, t, condition)
+        pred = self.model(x_t, t, **condition)
         return pred
 
     def compute_loss(
@@ -246,30 +246,40 @@ class SupervisedUNetBaseline(L.LightningModule):
             betas=(0.9, 0.999),
         )
 
-        # Compute warmup and total steps
-        # Use estimated_stepping_batches from trainer
-        if self.trainer is not None:
-            total_steps = self.trainer.estimated_stepping_batches
-            warmup_steps = int(
-                (self.warmup_epochs / self.trainer.max_epochs) * total_steps
-            )
+        # Compute warmup and total steps from trainer
+        # Note: self.trainer raises RuntimeError when not attached (Lightning 2.x)
+        try:
+            _trainer = self.trainer
+        except RuntimeError:
+            _trainer = None
+
+        if _trainer is not None and hasattr(_trainer, 'estimated_stepping_batches'):
+            total_steps = _trainer.estimated_stepping_batches
+            max_epochs = _trainer.max_epochs or 200
+            if not math.isfinite(total_steps) or max_epochs < 1:
+                total_steps = 100000
+                steps_per_epoch = 500
+            else:
+                steps_per_epoch = total_steps // max(1, max_epochs)
+            warmup_steps = self.warmup_epochs * steps_per_epoch
         else:
-            # Fallback if trainer not available
             warmup_steps = 1000
             total_steps = 100000
+
+        warmup_steps = max(1, warmup_steps) if self.warmup_epochs > 0 else 1
 
         # Linear warmup + cosine decay (same as diffusion model)
         warmup_scheduler = LinearLR(
             optimizer,
-            start_factor=1e-6,
+            start_factor=0.01 if self.warmup_epochs > 0 else 1.0,
             end_factor=1.0,
             total_iters=warmup_steps,
         )
 
         cosine_scheduler = CosineAnnealingLR(
             optimizer,
-            T_max=total_steps - warmup_steps,
-            eta_min=1e-6,
+            T_max=max(1, int(total_steps) - warmup_steps),
+            eta_min=self.learning_rate * 0.01,
         )
 
         scheduler = SequentialLR(

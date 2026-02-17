@@ -1,0 +1,33 @@
+# @package _global_
+# Experiment: Supervised UNet baseline (no diffusion)
+# Same architecture as our diffusion model, trained with direct MSE regression.
+# Ablation showing the value of diffusion modeling.
+
+experiment:
+  name: supervised_unet
+  tags: [baseline, supervised, dl]
+
+data:
+  sampling:
+    strategy: trajectory
+    trajectory:
+      method: mixed
+      num_trajectories: 3
+      points_per_trajectory: 100
+
+model:
+  model_type: supervised
+  unet:
+    size: medium
+  condition_channels: 64
+  conditioning:
+    use_building_map: true
+    use_sparse_rss: true
+    use_trajectory_mask: true
+    use_coverage_density: true
+    use_tx_position: true
+
+training:
+  max_epochs: 200
+  optimizer:
+    lr: 1e-4
